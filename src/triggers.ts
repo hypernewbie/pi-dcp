@@ -46,9 +46,9 @@ export function triggerCompaction(
   ctx.compact({
     customInstructions: focus,
     onComplete: () => {
+      // session_compact emits the detailed completion notification and bar.
       state.isCompacting = false;
       state.turnsSinceCompaction = 0;
-      notify(ctx, config, "Compacted context", "info");
     },
     onError: (error) => {
       state.isCompacting = false;

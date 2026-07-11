@@ -12,7 +12,8 @@ import { registerCommands } from "./commands.ts";
 import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
-import { renderStatusLine, updateStatus } from "./ascii-bar.ts";
+import { updateStatus } from "./ascii-bar.ts";
+import { createCompactionPreview, notifyCompaction } from "./compaction-bar.ts";
 import { notify, debug } from "./ui.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState, TriggerState } from "./types.ts";
 
@@ -45,6 +46,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       state.config.protectedFilePatterns,
     );
     resetTriggerState(state.triggerState);
+    state.compactionPreview = undefined;
     updateStatus(ctx, state.config);
 
     for (const warning of fresh.warnings) {
@@ -66,9 +68,11 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     updateStatus(ctx, state.config);
   });
 
-  pi.on("session_compact", (_event, ctx) => {
+  pi.on("session_compact", (event, ctx) => {
     const usage = ctx.getContextUsage();
     recordCompactionCompleted(state.triggerState, usage?.tokens ?? null);
+    notifyCompaction(ctx, state.compactionPreview, event, state.config.notification === "detailed");
+    state.compactionPreview = undefined;
     updateStatus(ctx, state.config);
   });
 
@@ -99,6 +103,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
+    state.compactionPreview = createCompactionPreview(event);
     return handleSessionBeforeCompact(event, ctx, state.config, state.protection);
   });
 }

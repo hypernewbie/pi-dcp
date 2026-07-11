@@ -69,11 +69,20 @@ export interface LoadedConfig {
   projectPath: string | null;
 }
 
+export interface CompactionPreview {
+  summarized: number;
+  splitPrefix: number;
+  kept: number;
+  tokensBefore: number;
+  reason: "manual" | "threshold" | "overflow";
+}
+
 export interface RuntimeState {
   config: DcpConfig;
   loaded: LoadedConfig;
   triggerState: TriggerState;
   protection: ResolvedProtection;
+  compactionPreview?: CompactionPreview;
 }
 
 export interface DcpConfig {

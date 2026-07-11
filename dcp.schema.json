@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/hypernewbie/pi-dcp/raw/main/dcp.schema.json",
+  "title": "pi-dcp configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean", "default": true },
+    "debug": { "type": "boolean", "default": false },
+    "notification": { "enum": ["off", "minimal", "detailed"], "default": "detailed" },
+    "pruning": { "$ref": "#/$defs/pruning" },
+    "triggers": { "$ref": "#/$defs/triggers" },
+    "compaction": { "$ref": "#/$defs/compaction" },
+    "protectedTools": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "protectedFilePatterns": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "enabled": { "type": "boolean", "default": true } }
+    }
+  },
+  "$defs": {
+    "threshold": {
+      "oneOf": [
+        { "type": "number", "minimum": 0 },
+        { "type": "string", "pattern": "^(100|[0-9]{1,2}(\\.[0-9]+)?)%$" }
+      ]
+    },
+    "pruning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "maxMessages": { "type": ["integer", "null"], "minimum": 1 },
+        "maxUserTurns": { "type": ["integer", "null"], "minimum": 1 },
+        "deduplication": { "$ref": "#/$defs/deduplication" },
+        "purgeErrors": { "$ref": "#/$defs/purgeErrors" }
+      }
+    },
+    "deduplication": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "protectedTools": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "purgeErrors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "turns": { "type": "integer", "minimum": 1, "default": 4 },
+        "protectedTools": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "triggers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endOfTurn": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "tokenThreshold": { "$ref": "#/$defs/threshold" },
+            "cooldownTurns": { "type": "integer", "minimum": 0, "default": 2 },
+            "focus": { "type": "string" }
+          }
+        },
+        "nudge": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "tokenThreshold": { "$ref": "#/$defs/threshold" },
+            "frequency": { "type": "integer", "minimum": 1, "default": 5 },
+            "force": { "enum": ["soft", "strong"], "default": "soft" }
+          }
+        }
+      }
+    },
+    "compaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "customSummary": { "type": "boolean", "default": true },
+        "summaryModel": { "type": ["string", "null"] },
+        "maxSummaryTokens": { "type": "integer", "minimum": 1, "default": 8192 },
+        "protectedTools": { "type": ["array", "null"], "items": { "type": "string" } },
+        "protectedFilePatterns": { "type": ["array", "null"], "items": { "type": "string" } },
+        "protectUserMessages": { "type": "boolean", "default": false },
+        "protectTags": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

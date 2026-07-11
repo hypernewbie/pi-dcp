@@ -16,7 +16,7 @@ export async function handleSessionBeforeCompact(
   if (!config.enabled || !config.compaction.customSummary) return undefined;
 
   const { preparation, signal, customInstructions } = event;
-  const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary, fileOps } = preparation;
+  const { messagesToSummarize, turnPrefixMessages, tokensBefore, firstKeptEntryId, previousSummary } = preparation;
 
   const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 
@@ -44,8 +44,15 @@ export async function handleSessionBeforeCompact(
   const conversationText = serializeConversation(convertToLlm(allMessages));
   const protectedAppendix = buildProtectedAppendix(allMessages, config.compaction, protection);
 
-  const readFiles = [...fileOps.read].filter((f) => !fileOps.edited.has(f) && !fileOps.written.has(f)).sort();
-  const modifiedFiles = [...new Set([...fileOps.edited, ...fileOps.written])].sort();
+  // Pi deliberately does not carry `details` forward from extension-provided
+  // compactions. Rebuild the cumulative file set from the preparation, branch
+  // entries, and the split-turn prefix so later summaries retain the full file
+  // history instead of silently dropping it.
+  const cumulativeFileOps = collectCumulativeFileOps(event);
+  const readFiles = [...cumulativeFileOps.read]
+    .filter((f) => !cumulativeFileOps.modified.has(f))
+    .sort();
+  const modifiedFiles = [...cumulativeFileOps.modified].sort();
 
   const { systemPrompt, userPrompt } = renderSummaryPrompt({
     conversationText,
@@ -111,4 +118,82 @@ function resolveModelBySpec(ctx: ExtensionContext, spec: string) {
     if (found) return found;
   }
   return undefined;
+}
+
+interface CumulativeFileOps {
+  read: Set<string>;
+  modified: Set<string>;
+}
+
+function collectCumulativeFileOps(event: SessionBeforeCompactEvent): CumulativeFileOps {
+  const read = new Set<string>(event.preparation.fileOps.read);
+  const modified = new Set<string>([
+    ...event.preparation.fileOps.edited,
+    ...event.preparation.fileOps.written,
+  ]);
+
+  // Include details from prior extension compactions and branch summaries.
+  // This is necessary because Pi excludes `fromHook` details when preparing
+  // the next compaction.
+  for (const entry of event.branchEntries) {
+    if (entry.type !== "compaction" && entry.type !== "branch_summary") continue;
+    const details = entry.details;
+    if (!details || typeof details !== "object") continue;
+    const value = details as { readFiles?: unknown; modifiedFiles?: unknown };
+    addStrings(read, value.readFiles);
+    addStrings(modified, value.modifiedFiles);
+  }
+
+  for (const message of [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages]) {
+    extractFileOpsFromMessage(message, read, modified);
+  }
+
+  return { read, modified };
+}
+
+function addStrings(target: Set<string>, value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (typeof item === "string" && item.length > 0) target.add(item);
+  }
+}
+
+function extractFileOpsFromMessage(
+  message: { role?: string; content?: unknown },
+  read: Set<string>,
+  modified: Set<string>,
+): void {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) return;
+
+  for (const block of message.content) {
+    if (!block || typeof block !== "object") continue;
+    const toolCall = block as { type?: string; name?: string; arguments?: unknown };
+    if (toolCall.type !== "toolCall" || typeof toolCall.name !== "string") continue;
+    const args = toolCall.arguments && typeof toolCall.arguments === "object"
+      ? toolCall.arguments as Record<string, unknown>
+      : {};
+
+    const directPath = typeof args.path === "string"
+      ? args.path
+      : typeof args.filePath === "string"
+        ? args.filePath
+        : undefined;
+
+    if (toolCall.name === "read" && directPath) read.add(directPath);
+    if ((toolCall.name === "write" || toolCall.name === "edit") && directPath) modified.add(directPath);
+
+    if (toolCall.name === "multiedit" && Array.isArray(args.edits)) {
+      for (const edit of args.edits) {
+        if (edit && typeof edit === "object" && typeof (edit as { path?: unknown }).path === "string") {
+          modified.add((edit as { path: string }).path);
+        }
+      }
+    }
+
+    if (toolCall.name === "apply_patch" && typeof args.patchText === "string") {
+      for (const match of args.patchText.matchAll(/^\+\+\+ b\/(.+)$/gm)) {
+        modified.add(match[1]);
+      }
+    }
+  }
 }

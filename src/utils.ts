@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { minimatch } from "minimatch";
 import type { TokenThreshold } from "./types.ts";
 
 /**
@@ -87,12 +88,5 @@ export function matchesAnyPattern(value: string, patterns: string[]): boolean {
 }
 
 function matchesPattern(value: string, pattern: string): boolean {
-  // Very small glob subset: exact match, or * prefix/suffix.
-  if (pattern === "*") return true;
-  if (pattern.startsWith("*") && pattern.endsWith("*")) {
-    return value.includes(pattern.slice(1, -1));
-  }
-  if (pattern.startsWith("*")) return value.endsWith(pattern.slice(1));
-  if (pattern.endsWith("*")) return value.startsWith(pattern.slice(0, -1));
-  return value === pattern;
+  return minimatch(value, pattern, { dot: true, nocase: false });
 }
