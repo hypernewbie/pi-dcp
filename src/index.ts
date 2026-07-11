@@ -12,6 +12,7 @@ import { registerCommands } from "./commands.ts";
 import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
+import { renderStatusLine, updateStatus } from "./ascii-bar.ts";
 import { notify, debug } from "./ui.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState, TriggerState } from "./types.ts";
 
@@ -44,6 +45,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       state.config.protectedFilePatterns,
     );
     resetTriggerState(state.triggerState);
+    updateStatus(ctx, state.config);
 
     for (const warning of fresh.warnings) {
       notify(ctx, state.config, warning, "warning");
@@ -61,11 +63,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     if (shouldTriggerCompaction(state.config, state.triggerState, usage.tokens, usage.contextWindow)) {
       triggerCompaction(ctx, state.config, state.triggerState);
     }
+    updateStatus(ctx, state.config);
   });
 
   pi.on("session_compact", (_event, ctx) => {
     const usage = ctx.getContextUsage();
     recordCompactionCompleted(state.triggerState, usage?.tokens ?? null);
+    updateStatus(ctx, state.config);
   });
 
   pi.on("before_agent_start", (event, ctx) => {
