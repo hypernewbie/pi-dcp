@@ -1,9 +1,11 @@
 {
   "name": "pi-dcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Dynamic Context Pruning for Pi — configurable compaction triggers and custom summaries",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -37,7 +39,14 @@
     "minimatch": "^10.0.0"
   },
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": [
+      "./src/index.ts"
+    ]
   },
-  "files": ["src/", "dcp.schema.json", "README.md", "LICENSE"]
+  "files": [
+    "src/",
+    "dcp.schema.json",
+    "README.md",
+    "LICENSE"
+  ]
 }
