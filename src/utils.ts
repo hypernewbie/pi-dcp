@@ -41,6 +41,19 @@ export function findNthRecentUserMessage(messages: AgentMessage[], n: number): n
 }
 
 /**
+ * Return the first index that belongs to the protected recent-turn window.
+ * If the transcript has fewer than `turns` user turns, protect everything.
+ */
+export function recentTurnsBoundary(messages: AgentMessage[], turns: number): number {
+  if (turns <= 0) return messages.length;
+  const userIndices = messages
+    .map((message, index) => (message.role === "user" ? index : -1))
+    .filter((index) => index >= 0);
+  if (userIndices.length <= turns) return 0;
+  return userIndices[userIndices.length - turns];
+}
+
+/**
  * Normalize and stable-stringify tool arguments for deduplication signatures.
  */
 export function createToolSignature(toolName: string, args: Record<string, unknown>): string {

@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { cloneMessages, findNthRecentUserMessage, matchesAnyPattern } from "../utils.ts";
+import { cloneMessages, matchesAnyPattern, recentTurnsBoundary } from "../utils.ts";
 import type { ResolvedProtection } from "../types.ts";
 
 export interface PurgeErrorsResult {
@@ -20,7 +20,7 @@ export function purgeErrors(
 
   if (turns <= 0) return { messages: out, purged: 0 };
 
-  const recentBoundary = findNthRecentUserMessage(out, turns);
+  const recentBoundary = recentTurnsBoundary(out, turns);
 
   // Find toolResult messages that are errors and older than the boundary.
   for (let i = 0; i < out.length; i++) {

@@ -92,7 +92,6 @@ describe("purgeErrors", () => {
       makeUser("run"),
       makeAssistant([{ id: "tc1", name: "bash", arguments: { command: "fail" } }]),
       makeResult("tc1", "error", true),
-      makeUser("follow up"),
     ];
 
     const result = purgeErrors(messages, 2, { protectedTools: [], protectedFilePatterns: [] });

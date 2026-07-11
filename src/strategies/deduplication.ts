@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { cloneMessages, createToolSignature, findNthRecentUserMessage, matchesAnyPattern } from "../utils.ts";
+import { cloneMessages, createToolSignature, matchesAnyPattern, recentTurnsBoundary } from "../utils.ts";
 import type { ResolvedProtection } from "../types.ts";
 
 export interface DeduplicationResult {
@@ -27,7 +27,7 @@ export function deduplicate(
     }
   }
 
-  const recentBoundary = findNthRecentUserMessage(out, recentUserTurnsProtected);
+  const recentBoundary = recentTurnsBoundary(out, recentUserTurnsProtected);
 
   // signature -> first toolCallId seen
   const signatureToFirstToolCallId = new Map<string, string>();
