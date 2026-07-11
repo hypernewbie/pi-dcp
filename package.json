@@ -1,0 +1,43 @@
+{
+  "name": "pi-dcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dynamic Context Pruning for Pi — configurable compaction triggers and custom summaries",
+  "keywords": ["pi-package"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hypernewbie/pi-dcp.git"
+  },
+  "homepage": "https://github.com/hypernewbie/pi-dcp",
+  "bugs": "https://github.com/hypernewbie/pi-dcp/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "vitest --run",
+    "typecheck": "tsc --noEmit",
+    "lint": "echo 'no linter configured'"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.5",
+    "@earendil-works/pi-ai": "^0.80.5",
+    "@earendil-works/pi-agent-core": "^0.80.5",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1",
+    "minimatch": "^10.0.0"
+  },
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  },
+  "files": ["src/", "README.md", "LICENSE"]
+}

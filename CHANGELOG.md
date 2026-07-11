@@ -1,0 +1,11 @@
+# Changelog
+
+## 0.1.0
+
+- Initial release.
+- End-of-turn compaction trigger with configurable token/percentage threshold and cooldown.
+- Custom DCP-style compaction summary with protected tools/files, user messages, and `<protect>` tags.
+- System-prompt nudges when context grows large.
+- `/dcp` command family for status, manual compaction, enable/disable, and config paths.
+- Experimental context-event pruning: deduplication and purge-errors (disabled by default).
+- Layered config: global `~/.pi/agent/dcp.json` + project `.pi/dcp.json`.
