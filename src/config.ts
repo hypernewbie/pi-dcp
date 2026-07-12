@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
-import type { DcpConfig, LoadedConfig, PartialDcpConfig, PiCompactionSettings, TokenThreshold } from "./types.ts";
+import type { DcpConfig, LoadedConfig, PartialDcpConfig, PiCompactionSettings } from "./types.ts";
 
 const GLOBAL_AGENT_DIR = join(homedir(), ".pi", "agent");
 const GLOBAL_CONFIG_PATH = join(GLOBAL_AGENT_DIR, "dcp.json");
@@ -47,15 +47,10 @@ export const DEFAULT_CONFIG: DcpConfig = {
   triggers: {
     endOfTurn: {
       enabled: true,
-      tokenThreshold: 250_000,
+      tokenThresholdPercent: 73,
+      tokenThresholdAbsolute: 450_000,
       cooldownTurns: 2,
       focus: "Preserve architecture decisions, file changes, and current task. Drop verbose logs and repeated outputs.",
-    },
-    nudge: {
-      enabled: true,
-      tokenThreshold: 150_000,
-      frequency: 5,
-      force: "soft",
     },
   },
 
@@ -179,7 +174,6 @@ function mergeTriggers(base: DcpConfig["triggers"], override: PartialDcpConfig["
   if (!override) return base;
   return {
     endOfTurn: override.endOfTurn ? { ...base.endOfTurn, ...override.endOfTurn } : base.endOfTurn,
-    nudge: override.nudge ? { ...base.nudge, ...override.nudge } : base.nudge,
   };
 }
 
@@ -204,33 +198,23 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
     warnings.push(`Invalid notification value "${merged.notification}"; using "detailed".`);
     merged.notification = "detailed";
   }
-  if (merged.triggers.nudge.force !== "soft" && merged.triggers.nudge.force !== "strong") {
-    warnings.push(`Invalid nudge.force value "${merged.triggers.nudge.force}"; using "soft".`);
-    merged.triggers.nudge.force = "soft";
-  }
 
-  merged.triggers.endOfTurn.tokenThreshold = normalizeThreshold(
-    merged.triggers.endOfTurn.tokenThreshold,
-    DEFAULT_CONFIG.triggers.endOfTurn.tokenThreshold,
-    "triggers.endOfTurn.tokenThreshold",
+  merged.triggers.endOfTurn.tokenThresholdPercent = normalizePercent(
+    merged.triggers.endOfTurn.tokenThresholdPercent,
+    DEFAULT_CONFIG.triggers.endOfTurn.tokenThresholdPercent,
+    "triggers.endOfTurn.tokenThresholdPercent",
     warnings,
   );
-  merged.triggers.nudge.tokenThreshold = normalizeThreshold(
-    merged.triggers.nudge.tokenThreshold,
-    DEFAULT_CONFIG.triggers.nudge.tokenThreshold,
-    "triggers.nudge.tokenThreshold",
+  merged.triggers.endOfTurn.tokenThresholdAbsolute = normalizeNullableInteger(
+    merged.triggers.endOfTurn.tokenThresholdAbsolute,
+    DEFAULT_CONFIG.triggers.endOfTurn.tokenThresholdAbsolute,
+    "triggers.endOfTurn.tokenThresholdAbsolute",
     warnings,
   );
   merged.triggers.endOfTurn.cooldownTurns = normalizeInteger(
     merged.triggers.endOfTurn.cooldownTurns,
     DEFAULT_CONFIG.triggers.endOfTurn.cooldownTurns,
     "triggers.endOfTurn.cooldownTurns",
-    warnings,
-  );
-  merged.triggers.nudge.frequency = normalizeInteger(
-    merged.triggers.nudge.frequency,
-    DEFAULT_CONFIG.triggers.nudge.frequency,
-    "triggers.nudge.frequency",
     warnings,
   );
   merged.compaction.maxSummaryTokens = normalizeInteger(
@@ -255,15 +239,17 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
   return merged;
 }
 
-function normalizeThreshold(
-  value: unknown,
-  fallback: TokenThreshold,
-  path: string,
-  warnings: string[],
-): TokenThreshold {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
-  if (typeof value === "string" && /^(?:100|[0-9]{1,2}(?:\\.[0-9]+)?)%$/.test(value)) return value as TokenThreshold;
-  warnings.push(`Invalid ${path}; using ${String(fallback)}.`);
+function normalizePercent(value: unknown, fallback: number | null, path: string, warnings: string[]): number | null {
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100) return value;
+  warnings.push(`Invalid ${path}; using ${fallback === null ? "null" : String(fallback)}.`);
+  return fallback;
+}
+
+function normalizeNullableInteger(value: unknown, fallback: number | null, path: string, warnings: string[]): number | null {
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  warnings.push(`Invalid ${path}; using ${fallback === null ? "null" : String(fallback)}.`);
   return fallback;
 }
 
@@ -277,16 +263,6 @@ function warnUnknownKeys(value: Record<string, unknown>, allowed: Set<string>, p
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) warnings.push(`Unknown config key ${path}.${key}; ignored by pi-dcp.`);
   }
-}
-
-/**
- * Resolve a token threshold to an absolute number given a context window.
- */
-export function resolveThreshold(threshold: TokenThreshold, contextWindow: number): number {
-  if (typeof threshold === "number") return threshold;
-  const pct = parseFloat(threshold);
-  if (Number.isNaN(pct)) return 0;
-  return Math.floor((pct / 100) * contextWindow);
 }
 
 /** Read Pi's own compaction settings for threshold diagnostics. */
@@ -313,35 +289,53 @@ function readSettingsFile(path: string): PiCompactionSettings {
 }
 
 /**
- * Validate the end-of-turn threshold against Pi's own compaction settings.
+ * Validate the end-of-turn thresholds against Pi's own compaction settings.
  * Returns warnings only; never hard-fails.
  */
 export function validateThreshold(
-  threshold: TokenThreshold,
+  percent: number | null,
+  absolute: number | null,
   contextWindow: number,
-  piSettings: { reserveTokens?: number; keepRecentTokens?: number } | undefined,
+  piSettings: PiCompactionSettings | undefined,
   maxSummaryTokens: number,
 ): string[] {
   const warnings: string[] = [];
-  const absolute = resolveThreshold(threshold, contextWindow);
   if (contextWindow <= 0) return warnings;
+
+  const effective = resolveEffectiveThreshold(percent, absolute, contextWindow);
+  if (effective === null) {
+    warnings.push("Both thresholds are null; pi-dcp will not auto-compact (Pi's built-in compaction handles capacity).");
+    return warnings;
+  }
 
   const reserve = piSettings?.reserveTokens ?? 16_384;
   const keep = piSettings?.keepRecentTokens ?? 20_000;
-
   const piTrigger = contextWindow - reserve;
-  if (absolute >= piTrigger) {
+
+  if (effective >= piTrigger) {
     warnings.push(
-      `endOfTurn.tokenThreshold (${absolute}) is at or above Pi's auto-compaction trigger (${piTrigger}); pi-dcp may never fire first.`,
+      `Effective threshold (${effective.toLocaleString()}) is at or above Pi's auto-compaction trigger (${piTrigger.toLocaleString()}); pi-dcp may never fire first.`,
     );
   }
 
   const floor = keep + maxSummaryTokens;
-  if (absolute <= floor) {
+  if (effective <= floor) {
     warnings.push(
-      `endOfTurn.tokenThreshold (${absolute}) is at or below the post-compaction floor (~${floor}); this may cause rapid re-compaction.`,
+      `Effective threshold (${effective.toLocaleString()}) is at or below the post-compaction floor (~${floor.toLocaleString()}); this may cause rapid re-compaction.`,
     );
   }
 
   return warnings;
+}
+
+/** Resolve the dual threshold to an absolute number, or null if both disabled. */
+export function resolveEffectiveThreshold(
+  percent: number | null,
+  absolute: number | null,
+  contextWindow: number,
+): number | null {
+  const fromPercent = percent !== null ? Math.floor((percent / 100) * contextWindow) : null;
+  const candidates = [fromPercent, absolute].filter((v): v is number => v !== null);
+  if (candidates.length === 0) return null;
+  return Math.min(...candidates);
 }

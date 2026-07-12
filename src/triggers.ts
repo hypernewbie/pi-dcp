@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { DcpConfig, TriggerState } from "./types.ts";
-import { resolveThreshold } from "./utils.ts";
+import { resolveEffectiveThreshold } from "./config.ts";
 import { notify, debug } from "./ui.ts";
 
 export function shouldTriggerCompaction(
@@ -11,7 +11,12 @@ export function shouldTriggerCompaction(
 ): boolean {
   if (!config.enabled || !config.triggers.endOfTurn.enabled) return false;
 
-  const threshold = resolveThreshold(config.triggers.endOfTurn.tokenThreshold, contextWindow);
+  const threshold = resolveEffectiveThreshold(
+    config.triggers.endOfTurn.tokenThresholdPercent,
+    config.triggers.endOfTurn.tokenThresholdAbsolute,
+    contextWindow,
+  );
+  if (threshold === null) return false;
   if (tokens <= threshold) return false;
 
   if (state.isCompacting) return false;

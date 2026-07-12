@@ -8,9 +8,8 @@ A Pi extension adapted from OpenCode's DCP that gives you **controllable, config
 
 ## What it does
 
-- **Early compaction triggers**: Fire `ctx.compact()` at a token threshold *you* choose (e.g. 250k or `"30%"`), instead of waiting for Pi's default trigger near `contextWindow - reserveTokens`.
+- **Dual-threshold compaction triggers**: fire `ctx.compact()` at the **lower** of a percentage-of-window threshold and an absolute token cap. Defaults (`73%` / `450k`) protect the wall on small windows (~200k) and cap cost on huge windows (~1M) — no per-model tuning.
 - **Custom compaction summaries**: Replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files, user messages, and `<protect>` blocks.
-- **Context-efficiency nudges**: Inject a short system-prompt hint when context grows large.
 - **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls.
 - **Compaction part bar**: detailed compaction notifications show summarized/split-prefix/kept parts using `░`, `⣿`, and `█`.
 - **`/dcp` commands**: inspect status, trigger compaction with focus, enable/disable, and locate config files.
@@ -46,15 +45,10 @@ Example:
   "triggers": {
     "endOfTurn": {
       "enabled": true,
-      "tokenThreshold": 250000,
+      "tokenThresholdPercent": 73,
+      "tokenThresholdAbsolute": 450000,
       "cooldownTurns": 2,
       "focus": "Preserve architecture decisions, file changes, and current task. Drop verbose logs and repeated outputs."
-    },
-    "nudge": {
-      "enabled": true,
-      "tokenThreshold": 150000,
-      "frequency": 5,
-      "force": "soft"
     }
   },
   "compaction": {
@@ -83,6 +77,25 @@ Example:
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
 | `/dcp status` | Alias for `/dcp` |
+
+## How the compaction threshold works
+
+Compaction fires at the **lower** of two thresholds, resolved against the current model's context window:
+
+```
+effective = min(tokenThresholdPercent × window, tokenThresholdAbsolute)
+```
+
+This adapts automatically across windows with **zero per-model config**:
+
+| Window | 73% | 450k cap | Fires at | Governs |
+|---|---|---|---|---|
+| 200k | 146k | 450k | 146k | percent (capacity) |
+| 272k | 198k | 450k | 198k | percent |
+| 372k | 271k | 450k | 271k | percent |
+| 1M | 730k | 450k | 450k | absolute (cost) |
+
+A big window is a *ceiling, not a target* — the absolute cap prevents filling a 1M window (≈ $10/turn) just because the model allows it. Either threshold can be set to `null` to disable it; both `null` defers entirely to Pi's built-in compaction.
 
 ## Why context-event pruning is off by default
 

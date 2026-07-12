@@ -4,7 +4,6 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 // User-facing configuration
 // ============================================================================
 
-export type TokenThreshold = number | `${number}%`;
 
 export interface DeduplicationConfig {
   enabled: boolean;
@@ -33,21 +32,16 @@ export interface PruningConfig {
 
 export interface EndOfTurnTriggerConfig {
   enabled: boolean;
-  tokenThreshold: TokenThreshold;
+  /** Percent of the context window, 0-100. null = ignore. */
+  tokenThresholdPercent: number | null;
+  /** Absolute token cap. null = ignore. */
+  tokenThresholdAbsolute: number | null;
   cooldownTurns: number;
   focus: string;
 }
 
-export interface NudgeConfig {
-  enabled: boolean;
-  tokenThreshold: TokenThreshold;
-  frequency: number;
-  force: "soft" | "strong";
-}
-
 export interface TriggersConfig {
   endOfTurn: EndOfTurnTriggerConfig;
-  nudge: NudgeConfig;
 }
 
 export interface CompactionConfig {
@@ -116,7 +110,6 @@ export interface TriggerState {
   isCompacting: boolean;
   turnsSinceCompaction: number;
   tokensAtLastCompaction: number | null;
-  turnsSinceLastNudge: number;
 }
 
 export interface ResolvedProtection {

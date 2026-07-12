@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolveThreshold } from "./utils.ts";
+import { resolveEffectiveThreshold } from "./config.ts";
 import { triggerCompaction, resetTriggerState } from "./triggers.ts";
 import { notify } from "./ui.ts";
 import type { RuntimeState } from "./types.ts";
@@ -96,22 +96,25 @@ async function showStatus(ctx: ExtensionCommandContext, state: RuntimeState): Pr
 
 function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[] {
   const usage = ctx.getContextUsage();
-  const endOfTurnThreshold = usage
-    ? resolveThreshold(state.config.triggers.endOfTurn.tokenThreshold, usage.contextWindow)
-    : null;
-  const nudgeThreshold = usage
-    ? resolveThreshold(state.config.triggers.nudge.tokenThreshold, usage.contextWindow)
-    : null;
+  const window = usage?.contextWindow ?? 0;
+  const effective = resolveEffectiveThreshold(
+    state.config.triggers.endOfTurn.tokenThresholdPercent,
+    state.config.triggers.endOfTurn.tokenThresholdAbsolute,
+    window,
+  );
+  const pct = state.config.triggers.endOfTurn.tokenThresholdPercent;
+  const abs = state.config.triggers.endOfTurn.tokenThresholdAbsolute;
 
-  return [
+  const lines = [
     `pi-dcp: ${state.config.enabled ? "enabled" : "disabled"}`,
     `context: ${usage?.tokens?.toLocaleString() ?? "unknown"} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens`,
-    `end-of-turn threshold: ${endOfTurnThreshold?.toLocaleString() ?? "unknown"}`,
-    `nudge threshold: ${nudgeThreshold?.toLocaleString() ?? "unknown"}`,
+    `thresholds: ${pct !== null ? `${pct}%` : "—"} / ${abs !== null ? abs.toLocaleString() : "—"} → effective ${effective !== null ? effective.toLocaleString() : "none (defer to Pi)"}`,
     `compaction cooldown: ${state.config.triggers.endOfTurn.cooldownTurns} turn(s)`,
     `custom summary: ${state.config.compaction.customSummary ? "on" : "off"}`,
     `context pruning: ${state.config.pruning.enabled ? "on (experimental)" : "off"}`,
   ];
+
+  return lines;
 }
 
 function display(ctx: ExtensionCommandContext, text: string): void {

@@ -46,7 +46,6 @@ describe("extension entry point", () => {
     expect(hookEvents).toContain("session_start");
     expect(hookEvents).toContain("turn_end");
     expect(hookEvents).toContain("session_compact");
-    expect(hookEvents).toContain("before_agent_start");
     expect(hookEvents).toContain("context");
     expect(hookEvents).toContain("session_before_compact");
   });

@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, loadPiCompactionSettings, validateThreshold } from "./config.ts";
+import { loadConfig, loadPiCompactionSettings, resolveEffectiveThreshold, validateThreshold } from "./config.ts";
 import { createTriggerState } from "./state.ts";
-import { buildNudge } from "./nudges.ts";
 import {
   shouldTriggerCompaction,
   triggerCompaction,
@@ -54,7 +53,8 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow ?? 0;
     const piCompaction = loadPiCompactionSettings(ctx.cwd, ctx.isProjectTrusted());
     for (const warning of validateThreshold(
-      state.config.triggers.endOfTurn.tokenThreshold,
+      state.config.triggers.endOfTurn.tokenThresholdPercent,
+      state.config.triggers.endOfTurn.tokenThresholdAbsolute,
       contextWindow,
       piCompaction,
       state.config.compaction.maxSummaryTokens,
@@ -81,10 +81,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     recordCompactionCompleted(state.triggerState, usage?.tokens ?? null);
     notifyCompaction(ctx, state.compactionPreview, event, state.config.notification === "detailed");
     state.compactionPreview = undefined;
-  });
-
-  pi.on("before_agent_start", (event, ctx) => {
-    return buildNudge(event, ctx, state.config, state.triggerState);
   });
 
   // Context-event pruning is experimental and disabled by default.

@@ -20,12 +20,6 @@
     }
   },
   "$defs": {
-    "threshold": {
-      "oneOf": [
-        { "type": "number", "minimum": 0 },
-        { "type": "string", "pattern": "^(100|[0-9]{1,2}(\\.[0-9]+)?)%$" }
-      ]
-    },
     "pruning": {
       "type": "object",
       "additionalProperties": false,
@@ -70,19 +64,10 @@
           "additionalProperties": false,
           "properties": {
             "enabled": { "type": "boolean", "default": true },
-            "tokenThreshold": { "$ref": "#/$defs/threshold" },
+            "tokenThresholdPercent": { "type": ["number", "null"], "minimum": 0, "maximum": 100, "default": 73 },
+            "tokenThresholdAbsolute": { "type": ["number", "null"], "minimum": 0, "default": 450000 },
             "cooldownTurns": { "type": "integer", "minimum": 0, "default": 2 },
             "focus": { "type": "string" }
-          }
-        },
-        "nudge": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": { "type": "boolean", "default": true },
-            "tokenThreshold": { "$ref": "#/$defs/threshold" },
-            "frequency": { "type": "integer", "minimum": 1, "default": 5 },
-            "force": { "enum": ["soft", "strong"], "default": "soft" }
           }
         }
       }

@@ -1,22 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { minimatch } from "minimatch";
-import type { TokenThreshold } from "./types.ts";
 
 /**
  * Deep-clone an array of AgentMessages so pruning strategies can mutate freely.
  */
 export function cloneMessages(messages: AgentMessage[]): AgentMessage[] {
   return JSON.parse(JSON.stringify(messages)) as AgentMessage[];
-}
-
-/**
- * Resolve a token threshold to an absolute number given a context window.
- */
-export function resolveThreshold(threshold: TokenThreshold, contextWindow: number): number {
-  if (typeof threshold === "number") return threshold;
-  const pct = parseFloat(threshold);
-  if (Number.isNaN(pct)) return 0;
-  return Math.floor((pct / 100) * contextWindow);
 }
 
 /**

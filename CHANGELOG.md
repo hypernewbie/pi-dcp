@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- **Dual-threshold compaction model.** Compaction fires at the lower of `tokenThresholdPercent` (default `73%` of window) and `tokenThresholdAbsolute` (default `450000`). Protects the wall on small windows and caps cost on huge windows, with zero per-model config.
+- **Removed the nudge subsystem.** The "be concise" system-prompt injection was slop; deleted entirely (no behavioral value, adds tokens).
+- `/dcp status` now shows both thresholds and the resolved effective value.
+
 ## 0.1.3
 
 - Made `/dcp` display both command help and the current status.
