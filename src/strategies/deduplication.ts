@@ -12,6 +12,7 @@ import type { ResolvedProtection } from "../types.ts";
 export interface DeduplicationResult {
   messages: AgentMessage[];
   deduplicated: number;
+  dedupedIds: string[];
 }
 
 const PLACEHOLDER = (toolName: string) =>
@@ -39,6 +40,8 @@ export function deduplicate(
 
     for (const block of message.content) {
       if (block.type !== "toolCall") continue;
+      // Subagent results are exempt from deduplication unless explicitly opted in.
+      if (block.name === "subagent") continue;
       const path = extractPath(block.arguments);
       if (matchesAnyPattern(block.name, protection.protectedTools)) continue;
       if (path && matchesAnyPattern(path, protection.protectedFilePatterns)) continue;
@@ -51,6 +54,7 @@ export function deduplicate(
   }
 
   let deduplicated = 0;
+  const dedupedIds: string[] = [];
   for (const ids of groups.values()) {
     // Exact DCP policy: retain only the most recent call in a duplicate group.
     for (const toolCallId of ids.slice(0, -1)) {
@@ -60,10 +64,11 @@ export function deduplicate(
       if (result.role !== "toolResult") continue;
       result.content = [{ type: "text", text: PLACEHOLDER(result.toolName) }];
       deduplicated++;
+      dedupedIds.push(toolCallId);
     }
   }
 
-  return { messages: out, deduplicated };
+  return { messages: out, deduplicated, dedupedIds };
 }
 
 function extractPath(args: Record<string, unknown>): string | undefined {

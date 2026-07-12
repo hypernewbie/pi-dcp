@@ -1,18 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { formatCompactionNotification, renderCompactionBar } from "../src/compaction-bar.ts";
+import {
+  formatCompactionNotification,
+  formatMinimalNotification,
+  renderCompactionBar,
+  createCompactionPreview,
+} from "../src/compaction-bar.ts";
 import type { CompactionPreview } from "../src/types.ts";
 
-const preview: CompactionPreview = {
+const previewDcpCommand: CompactionPreview = {
+  summarized: 80,
+  splitPrefix: 10,
+  kept: 110,
+  tokensBefore: 420_000,
+  reason: "manual",
+  initiator: "dcp-command",
+};
+
+const previewPiNative: CompactionPreview = {
   summarized: 80,
   splitPrefix: 10,
   kept: 110,
   tokensBefore: 420_000,
   reason: "threshold",
+  initiator: "pi-native",
 };
 
 describe("compaction bar", () => {
   it("renders the three context parts in order", () => {
-    const bar = renderCompactionBar(preview, 20);
+    const bar = renderCompactionBar(previewDcpCommand, 20);
     expect(bar).toMatch(/^│.*│$/);
     expect(bar).toContain("░");
     expect(bar).toContain("⣿");
@@ -22,17 +37,56 @@ describe("compaction bar", () => {
     expect(bar.indexOf("⣿")).toBeLessThan(bar.indexOf("█"));
   });
 
-  it("renders a useful completion notification", () => {
-    const message = formatCompactionNotification(preview, {
+  it("renders DCP command notification with truthful labels", () => {
+    const message = formatCompactionNotification(previewDcpCommand, {
       type: "session_compact",
-      compactionEntry: {} as never,
+      compactionEntry: { tokensBefore: 420_000 } as never,
       fromExtension: true,
+      reason: "manual",
+      willRetry: false,
+    });
+    expect(message).toContain("DCP COMPRESS");
+    expect(message).toContain("command");
+    expect(message).toContain("DCP summary");
+    expect(message).toContain("summarized: 80");
+    expect(message).toContain("kept: 110");
+  });
+
+  it("renders Pi native notification with correct labels", () => {
+    const message = formatCompactionNotification(previewPiNative, {
+      type: "session_compact",
+      compactionEntry: { tokensBefore: 420_000 } as never,
+      fromExtension: false,
       reason: "threshold",
       willRetry: false,
     });
-    expect(message).toContain("▣ DCP | Compacted ~420k");
-    expect(message).toContain("summarized: 80");
-    expect(message).toContain("kept: 110");
-    expect(message).toContain("Reason: threshold");
+    expect(message).toContain("PI COMPACT");
+    expect(message).toContain("threshold");
+    expect(message).toContain("Pi default summary");
+  });
+
+  it("renders minimal notification", () => {
+    const minimal = formatMinimalNotification("dcp-dual-threshold", "manual", true, 450_000);
+    expect(minimal).toContain("DCP COMPRESS");
+    expect(minimal).toContain("dual-threshold");
+    expect(minimal).toContain("DCP summary");
+  });
+
+  it("includes receipt when provided", () => {
+    const message = formatCompactionNotification(
+      previewDcpCommand,
+      {
+        type: "session_compact",
+        compactionEntry: { tokensBefore: 420_000 } as never,
+        fromExtension: true,
+        reason: "manual",
+        willRetry: false,
+      },
+      { fileRefs: 6, protectedBlocks: 2, subagentArtifacts: 1 },
+    );
+    expect(message).toContain("carried forward");
+    expect(message).toContain("6 file refs");
+    expect(message).toContain("2 protected");
+    expect(message).toContain("1 subagent artifact");
   });
 });

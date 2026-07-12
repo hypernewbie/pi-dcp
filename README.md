@@ -9,9 +9,11 @@ A Pi extension adapted from OpenCode's DCP that gives you **controllable, config
 ## What it does
 
 - **Dual-threshold compaction triggers**: fire `ctx.compact()` at the **lower** of a percentage-of-window threshold and an absolute token cap. Defaults (`73%` / `450k`) protect the wall on small windows (~200k) and cap cost on huge windows (~1M) — no per-model tuning.
-- **Custom compaction summaries**: Replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files, user messages, and `<protect>` blocks.
-- **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls.
-- **Compaction part bar**: detailed compaction notifications show summarized/split-prefix/kept parts using `░`, `⣿`, and `█`.
+- **Custom compaction summaries**: Replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files, user messages, and artifact references. Bounded input budget prevents giant outputs from wrecking compaction.
+- **Subagent result preservation**: Parent-visible `subagent` results (conclusions + artifact paths) survive compaction without importing full child transcripts.
+- **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls (subagent results are exempt).
+- **Truthful compaction notifications**: `░ ⣿ █` part bar with DCP vs Pi provenance (`DCP COMPRESS · command · DCP summary` vs `PI COMPACT · manual · Pi default summary`) and a compact receipt of what was carried forward.
+- **Honest stats**: `/dcp stats` shows persistent, branch-local compaction/pruning counts via custom session entries.
 - **`/dcp` commands**: inspect status, trigger compaction with focus, enable/disable, and locate config files.
 
 ## Install
@@ -55,8 +57,9 @@ Example:
     "customSummary": true,
     "summaryModel": null,
     "maxSummaryTokens": 8192,
-    "protectUserMessages": false,
-    "protectTags": false
+    "maxProtectedTokens": 24000,
+    "preserveSubagentResults": true,
+    "protectUserMessages": false
   },
   "pruning": {
     "enabled": false,
@@ -73,10 +76,11 @@ Example:
 | Command | Description |
 |---|---|
 | `/dcp` | Show commands and current status: enabled, tokens, thresholds, settings |
+| `/dcp status` | Show detailed status including last compaction |
+| `/dcp stats` | Show compaction/pruning stats (current branch) |
 | `/dcp compact [focus]` / `/dcp compress [focus]` | Trigger compaction now with optional focus text |
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
-| `/dcp status` | Alias for `/dcp` |
 
 ## How the compaction threshold works
 

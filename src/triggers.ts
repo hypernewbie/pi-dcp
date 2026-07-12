@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { DcpConfig, TriggerState } from "./types.ts";
+import type { CompactionInitiator, DcpConfig, TriggerState } from "./types.ts";
 import { resolveEffectiveThreshold } from "./config.ts";
 import { notify, debug } from "./ui.ts";
 
@@ -40,13 +40,15 @@ export function triggerCompaction(
   config: DcpConfig,
   state: TriggerState,
   customInstructions?: string,
+  initiator: CompactionInitiator = "dcp-command",
 ): void {
   if (state.isCompacting) return;
 
   const focus = customInstructions ?? config.triggers.endOfTurn.focus;
   state.isCompacting = true;
+  state.pendingInitiator = initiator;
 
-  debug(ctx, config, `Triggering compaction (focus: ${focus.slice(0, 60)}...)`);
+  debug(ctx, config, `Triggering compaction (initiator: ${initiator}, focus: ${focus.slice(0, 60)}...)`);
 
   ctx.compact({
     customInstructions: focus,
@@ -54,9 +56,11 @@ export function triggerCompaction(
       // session_compact emits the detailed completion notification and bar.
       state.isCompacting = false;
       state.turnsSinceCompaction = 0;
+      state.pendingInitiator = null;
     },
     onError: (error) => {
       state.isCompacting = false;
+      state.pendingInitiator = null;
       notify(ctx, config, `Compaction failed: ${error.message}`, "error");
     },
   });
@@ -66,10 +70,19 @@ export function recordCompactionCompleted(state: TriggerState, tokens: number | 
   state.isCompacting = false;
   state.turnsSinceCompaction = 0;
   state.tokensAtLastCompaction = tokens ?? null;
+  state.pendingInitiator = null;
 }
 
 export function resetTriggerState(state: TriggerState): void {
   state.isCompacting = false;
   state.turnsSinceCompaction = 0;
   state.tokensAtLastCompaction = null;
+  state.pendingInitiator = null;
+  state.lastCompaction = undefined;
+}
+
+export function consumePendingInitiator(state: TriggerState): CompactionInitiator {
+  const pending = state.pendingInitiator ?? "pi-native";
+  state.pendingInitiator = null;
+  return pending;
 }

@@ -13,6 +13,7 @@ import type { ResolvedProtection } from "../types.ts";
 export interface PurgeErrorsResult {
   messages: AgentMessage[];
   purged: number;
+  purgedIds: string[];
 }
 
 const PLACEHOLDER = "[input removed due to failed tool call]";
@@ -23,6 +24,7 @@ export function purgeErrors(
   protection: ResolvedProtection,
 ): PurgeErrorsResult {
   let purged = 0;
+  const purgedIds: string[] = [];
   const out = cloneMessages(messages);
   const turnThreshold = Math.max(1, turns);
   const recentBoundary = recentTurnsBoundary(out, turnThreshold);
@@ -30,6 +32,8 @@ export function purgeErrors(
   for (let index = 0; index < out.length; index++) {
     const result = out[index];
     if (result.role !== "toolResult" || !result.isError) continue;
+    // Subagent results are exempt from error-input purging.
+    if (result.toolName === "subagent") continue;
     if (index >= recentBoundary) continue;
     if (matchesAnyPattern(result.toolName, protection.protectedTools)) continue;
 
@@ -46,10 +50,13 @@ export function purgeErrors(
         changed = true;
       }
     }
-    if (changed) purged++;
+    if (changed) {
+      purged++;
+      purgedIds.push(result.toolCallId);
+    }
   }
 
-  return { messages: out, purged };
+  return { messages: out, purged, purgedIds };
 }
 
 function findToolCall(messages: AgentMessage[], toolCallId: string) {

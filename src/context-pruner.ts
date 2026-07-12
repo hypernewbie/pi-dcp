@@ -12,17 +12,22 @@ export function pruneContext(
   let deduplicated = 0;
   let errorsPurged = 0;
 
+  let deduplicatedIds: string[] = [];
+  let purgedIds: string[] = [];
+
   if (config.deduplication.enabled) {
     const recentTurns = config.turnProtection.enabled ? config.turnProtection.turns : 0;
     const result = deduplicate(working, protection, recentTurns);
     working = result.messages;
     deduplicated = result.deduplicated;
+    deduplicatedIds = result.dedupedIds;
   }
 
   if (config.purgeErrors.enabled) {
     const result = purgeErrors(working, config.purgeErrors.turns, protection);
     working = result.messages;
     errorsPurged = result.purged;
+    purgedIds = result.purgedIds;
   }
 
   return {
@@ -30,6 +35,8 @@ export function pruneContext(
     stats: {
       deduplicated,
       errorsPurged,
+      deduplicatedIds,
+      purgedIds,
     },
   };
 }

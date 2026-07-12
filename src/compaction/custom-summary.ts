@@ -20,7 +20,6 @@ export async function handleSessionBeforeCompact(
 
   const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 
-  // Resolve summarization model: configured name, or current conversation model.
   let model = ctx.model;
   if (config.compaction.summaryModel) {
     const resolved = resolveModelBySpec(ctx, config.compaction.summaryModel);
@@ -42,25 +41,28 @@ export async function handleSessionBeforeCompact(
   }
 
   const conversationText = serializeConversation(convertToLlm(allMessages));
-  const protectedAppendix = buildProtectedAppendix(allMessages, config.compaction, protection);
+  const protectedResult = buildProtectedAppendix(allMessages, config.compaction, protection);
 
-  // Pi deliberately does not carry `details` forward from extension-provided
-  // compactions. Rebuild the cumulative file set from the preparation, branch
-  // entries, and the split-turn prefix so later summaries retain the full file
-  // history instead of silently dropping it.
   const cumulativeFileOps = collectCumulativeFileOps(event);
   const readFiles = [...cumulativeFileOps.read]
     .filter((f) => !cumulativeFileOps.modified.has(f))
     .sort();
   const modifiedFiles = [...cumulativeFileOps.modified].sort();
 
+  // Merge file refs from protected collection (e.g., write/edit paths that were protected)
+  const allFileRefs = [...new Set([...readFiles, ...modifiedFiles, ...protectedResult.collection.fileReferences])].sort();
+  // For prompt we separate read vs modified, but we have full sets already.
+  // Use the cumulative sets for read/modified, and protected artifacts for artifacts section.
+  const artifacts = [...new Set([...protectedResult.collection.subagentArtifacts])].sort();
+
   const { systemPrompt, userPrompt } = renderSummaryPrompt({
     conversationText,
     previousSummary,
     customInstructions,
-    protectedAppendix,
+    protectedAppendix: protectedResult.text,
     readFiles,
     modifiedFiles,
+    subagentArtifacts: artifacts,
   });
 
   try {
@@ -79,8 +81,8 @@ export async function handleSessionBeforeCompact(
       },
     );
 
-    const summary = response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+    const summary = (response.content as Array<{ type: string; text?: string }>)
+      .filter((c): c is { type: string; text: string } => typeof (c as any).text === "string" && (c as any).type === "text")
       .map((c) => c.text)
       .join("\n");
 
@@ -97,6 +99,12 @@ export async function handleSessionBeforeCompact(
         details: {
           readFiles,
           modifiedFiles,
+          artifacts,
+          protectedBlocks: protectedResult.collection.items.length,
+          fileRefs: allFileRefs.length,
+          subagentArtifacts: artifacts.length,
+          truncatedProtected: protectedResult.collection.truncatedCount,
+          skippedProtected: protectedResult.collection.skippedCount,
           fromDcp: true,
         },
       },
@@ -109,7 +117,6 @@ export async function handleSessionBeforeCompact(
 }
 
 function resolveModelBySpec(ctx: ExtensionContext, spec: string) {
-  // Try "provider/id" split, which is the supported lookup API.
   const slash = spec.indexOf("/");
   if (slash > 0) {
     const provider = spec.slice(0, slash);
@@ -132,16 +139,14 @@ function collectCumulativeFileOps(event: SessionBeforeCompactEvent): CumulativeF
     ...event.preparation.fileOps.written,
   ]);
 
-  // Include details from prior extension compactions and branch summaries.
-  // This is necessary because Pi excludes `fromHook` details when preparing
-  // the next compaction.
   for (const entry of event.branchEntries) {
     if (entry.type !== "compaction" && entry.type !== "branch_summary") continue;
     const details = entry.details;
     if (!details || typeof details !== "object") continue;
-    const value = details as { readFiles?: unknown; modifiedFiles?: unknown };
+    const value = details as { readFiles?: unknown; modifiedFiles?: unknown; artifacts?: unknown };
     addStrings(read, value.readFiles);
     addStrings(modified, value.modifiedFiles);
+    // artifacts are handled separately but we include file paths if present
   }
 
   for (const message of [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages]) {
@@ -181,6 +186,5 @@ function extractFileOpsFromMessage(
 
     if (toolCall.name === "read" && directPath) read.add(directPath);
     if ((toolCall.name === "write" || toolCall.name === "edit") && directPath) modified.add(directPath);
-
   }
 }

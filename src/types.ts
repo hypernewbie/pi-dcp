@@ -53,7 +53,10 @@ export interface CompactionConfig {
   /** null means inherit global protectedFilePatterns */
   protectedFilePatterns: string[] | null;
   protectUserMessages: boolean;
-  protectTags: boolean;
+  /** Max tokens for protected input to the summarizer */
+  maxProtectedTokens: number;
+  /** Whether to preserve parent-visible subagent results */
+  preserveSubagentResults: boolean;
 }
 
 export interface CommandsConfig {
@@ -72,12 +75,31 @@ export interface LoadedConfig {
   projectPath: string | null;
 }
 
+export type CompactionInitiator = "dcp-command" | "dcp-dual-threshold" | "pi-native";
+
 export interface CompactionPreview {
   summarized: number;
   splitPrefix: number;
   kept: number;
   tokensBefore: number;
+  /** Original Pi host reason */
   reason: "manual" | "threshold" | "overflow";
+  /** Who initiated the compaction */
+  initiator: CompactionInitiator;
+}
+
+export interface LastCompactionInfo {
+  initiator: CompactionInitiator;
+  /** Display reason: command | dual-threshold | manual | threshold | overflow */
+  reason: "command" | "dual-threshold" | "manual" | "threshold" | "overflow";
+  hostReason: "manual" | "threshold" | "overflow";
+  summaryProvider: "dcp" | "pi";
+  tokensBefore: number;
+  timestamp: number;
+  hadBar: boolean;
+  fileRefs?: number;
+  protectedBlocks?: number;
+  subagentArtifacts?: number;
 }
 
 export interface RuntimeState {
@@ -86,6 +108,7 @@ export interface RuntimeState {
   triggerState: TriggerState;
   protection: ResolvedProtection;
   compactionPreview?: CompactionPreview;
+  stats?: StatsState;
 }
 
 export interface DcpConfig {
@@ -110,6 +133,8 @@ export interface TriggerState {
   isCompacting: boolean;
   turnsSinceCompaction: number;
   tokensAtLastCompaction: number | null;
+  pendingInitiator: CompactionInitiator | null;
+  lastCompaction?: LastCompactionInfo;
 }
 
 export interface ResolvedProtection {
@@ -132,6 +157,8 @@ export interface PruneResult {
   stats: {
     deduplicated: number;
     errorsPurged: number;
+    deduplicatedIds: string[];
+    purgedIds: string[];
   };
 }
 
@@ -147,6 +174,81 @@ export interface SummaryPrompt {
 export interface FileOperations {
   read: Set<string>;
   modified: Set<string>;
+}
+
+// ----------------------------------------------------------------------------
+// Protected content - bounded collector
+// ----------------------------------------------------------------------------
+
+export type ProtectedItemKind = "tool-result" | "user-message" | "subagent-result";
+
+export interface ProtectedItem {
+  id: string;
+  kind: ProtectedItemKind;
+  sourceEntryId?: string;
+  toolName?: string;
+  path?: string;
+  content: string;
+  originalCharacters: number;
+  includedCharacters: number;
+  truncated: boolean;
+}
+
+export interface ProtectedCollectionResult {
+  items: ProtectedItem[];
+  truncatedCount: number;
+  skippedCount: number;
+  totalOriginalChars: number;
+  totalIncludedChars: number;
+  fileReferences: string[];
+  subagentArtifacts: string[];
+}
+
+// ----------------------------------------------------------------------------
+// Subagent result normalization
+// ----------------------------------------------------------------------------
+
+export type SubagentStatus = "completed" | "failed" | "interrupted" | "running" | "unknown";
+
+export interface NormalizedSubagentResult {
+  status: SubagentStatus;
+  conclusion?: string;
+  outputPath?: string;
+  artifactPaths: string[];
+  rawSummary?: string;
+}
+
+// ----------------------------------------------------------------------------
+// Stats
+// ----------------------------------------------------------------------------
+
+export interface StatsOperation {
+  version: 1;
+  operationId: string;
+  kind: "compaction" | "deduplication" | "purge-errors";
+  timestamp: number;
+  source?: "dcp-command" | "dcp-dual-threshold" | "pi-native";
+  hostReason?: "manual" | "threshold" | "overflow";
+  summaryProvider?: "dcp" | "pi";
+  tokensBefore?: number;
+  summarizedMessages?: number;
+  splitPrefixMessages?: number;
+  keptMessages?: number;
+  affectedToolCallIds?: string[];
+  removedCharacters?: number;
+}
+
+export interface StatsState {
+  compactions: number;
+  dcpInitiated: number;
+  piInitiated: number;
+  dcpSummaries: number;
+  piSummaries: number;
+  deduplicated: number;
+  errorsPurged: number;
+  lastCompactionTimestamp?: number;
+  operations: StatsOperation[];
+  seenToolCallIds: Set<string>;
 }
 
 // ============================================================================

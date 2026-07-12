@@ -61,7 +61,8 @@ export const DEFAULT_CONFIG: DcpConfig = {
     protectedTools: null,
     protectedFilePatterns: null,
     protectUserMessages: false,
-    protectTags: false,
+    maxProtectedTokens: 24_000,
+    preserveSubagentResults: true,
   },
 
   // Pi-native equivalents of DCP's protected write/edit tools.
@@ -223,6 +224,20 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
     "compaction.maxSummaryTokens",
     warnings,
   );
+  merged.compaction.maxProtectedTokens = normalizeInteger(
+    merged.compaction.maxProtectedTokens,
+    DEFAULT_CONFIG.compaction.maxProtectedTokens,
+    "compaction.maxProtectedTokens",
+    warnings,
+  );
+  if (typeof merged.compaction.preserveSubagentResults !== "boolean") {
+    warnings.push(
+      `Invalid compaction.preserveSubagentResults; using ${String(
+        DEFAULT_CONFIG.compaction.preserveSubagentResults,
+      )}.`,
+    );
+    merged.compaction.preserveSubagentResults = DEFAULT_CONFIG.compaction.preserveSubagentResults;
+  }
   merged.pruning.turnProtection.turns = normalizeInteger(
     merged.pruning.turnProtection.turns,
     DEFAULT_CONFIG.pruning.turnProtection.turns,

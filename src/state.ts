@@ -5,5 +5,6 @@ export function createTriggerState(): TriggerState {
     isCompacting: false,
     turnsSinceCompaction: 0,
     tokensAtLastCompaction: null,
+    pendingInitiator: null,
   };
 }

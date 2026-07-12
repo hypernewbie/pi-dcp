@@ -12,6 +12,7 @@ export interface RenderSummaryPromptInput {
   protectedAppendix?: string;
   readFiles?: string[];
   modifiedFiles?: string[];
+  subagentArtifacts?: string[];
 }
 
 export function renderSummaryPrompt(input: RenderSummaryPromptInput): SummaryPrompt {
@@ -27,15 +28,35 @@ export function renderSummaryPrompt(input: RenderSummaryPromptInput): SummaryPro
     parts.push(`## Focus Instructions\n\n${input.customInstructions}`);
   }
 
-  const fileOpsParts: string[] = [];
+  const fileOpsLines: string[] = [];
+  if (input.modifiedFiles && input.modifiedFiles.length > 0) {
+    fileOpsLines.push(`### Relevant Files\n${input.modifiedFiles.map((f) => `- modified: ${f}`).join("\n")}`);
+  }
   if (input.readFiles && input.readFiles.length > 0) {
-    fileOpsParts.push(`<read-files>\n${input.readFiles.join("\n")}\n</read-files>`);
+    if (fileOpsLines.length === 0) {
+      fileOpsLines.push(`### Relevant Files\n${input.readFiles.map((f) => `- read: ${f}`).join("\n")}`);
+    } else {
+      fileOpsLines.push(`${input.readFiles.map((f) => `- read: ${f}`).join("\n")}`);
+    }
+  }
+  // Legacy XML tags still included for tooling that expects them
+  const legacyFileOps: string[] = [];
+  if (input.readFiles && input.readFiles.length > 0) {
+    legacyFileOps.push(`<read-files>\n${input.readFiles.join("\n")}\n</read-files>`);
   }
   if (input.modifiedFiles && input.modifiedFiles.length > 0) {
-    fileOpsParts.push(`<modified-files>\n${input.modifiedFiles.join("\n")}\n</modified-files>`);
+    legacyFileOps.push(`<modified-files>\n${input.modifiedFiles.join("\n")}\n</modified-files>`);
   }
-  if (fileOpsParts.length > 0) {
-    parts.push(`## File Operations\n\n${fileOpsParts.join("\n\n")}`);
+
+  if (fileOpsLines.length > 0) {
+    parts.push(`${fileOpsLines.join("\n")}`);
+  }
+  if (legacyFileOps.length > 0) {
+    parts.push(`## File Operations (legacy)\n\n${legacyFileOps.join("\n\n")}`);
+  }
+
+  if (input.subagentArtifacts && input.subagentArtifacts.length > 0) {
+    parts.push(`## Artifacts\n\n${input.subagentArtifacts.map((a) => `- ${a}`).join("\n")}`);
   }
 
   if (input.protectedAppendix) {

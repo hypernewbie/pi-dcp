@@ -3,22 +3,23 @@ import type {
   SessionBeforeCompactEvent,
   SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
-import type { CompactionPreview } from "./types.ts";
+import type { CompactionInitiator, CompactionPreview, DcpConfig } from "./types.ts";
 
 const PRUNED = "░";
 const SPLIT_PREFIX = "⣿";
 const KEPT = "█";
 
 /** Capture the logical shape of the context immediately before compaction. */
-export function createCompactionPreview(event: SessionBeforeCompactEvent): CompactionPreview {
+export function createCompactionPreview(
+  event: SessionBeforeCompactEvent,
+  initiator: CompactionInitiator,
+): CompactionPreview {
   const { preparation, branchEntries } = event;
   const firstKeptIndex = branchEntries.findIndex((entry) => entry.id === preparation.firstKeptEntryId);
 
   const summarized = preparation.messagesToSummarize.length;
   const splitPrefix = preparation.turnPrefixMessages.length;
-  const kept = firstKeptIndex >= 0
-    ? countContextEntries(branchEntries.slice(firstKeptIndex))
-    : 0;
+  const kept = firstKeptIndex >= 0 ? countContextEntries(branchEntries.slice(firstKeptIndex)) : 0;
 
   return {
     summarized,
@@ -26,7 +27,22 @@ export function createCompactionPreview(event: SessionBeforeCompactEvent): Compa
     kept,
     tokensBefore: preparation.tokensBefore,
     reason: event.reason,
+    initiator,
   };
+}
+
+function getInitiatorLabel(initiator: CompactionInitiator): string {
+  return initiator === "pi-native" ? "PI COMPACT" : "DCP COMPRESS";
+}
+
+function getReasonLabel(initiator: CompactionInitiator, hostReason: "manual" | "threshold" | "overflow"): string {
+  if (initiator === "dcp-command") return "command";
+  if (initiator === "dcp-dual-threshold") return "dual-threshold";
+  return hostReason;
+}
+
+function getSummaryProviderLabel(fromExtension: boolean): string {
+  return fromExtension ? "DCP summary" : "Pi default summary";
 }
 
 /**
@@ -47,7 +63,11 @@ export function renderCompactionBar(preview: CompactionPreview, width = 50): str
 
   if (total <= 0) return `│${PRUNED.repeat(width)}│`;
 
-  const lengths = allocateWidths(parts.map((part) => part.count), width, total);
+  const lengths = allocateWidths(
+    parts.map((part) => part.count),
+    width,
+    total,
+  );
   let bar = "";
   for (let i = 0; i < parts.length; i++) {
     bar += parts[i].glyph.repeat(lengths[i]);
@@ -55,36 +75,109 @@ export function renderCompactionBar(preview: CompactionPreview, width = 50): str
   return `│${bar}│`;
 }
 
+export interface CompactionReceipt {
+  fileRefs?: number;
+  protectedBlocks?: number;
+  subagentArtifacts?: number;
+}
+
 export function formatCompactionNotification(
   preview: CompactionPreview,
   event: SessionCompactEvent,
+  receipt?: CompactionReceipt,
 ): string {
   const bar = renderCompactionBar(preview);
-  const reason = event.reason === "threshold" ? "threshold" : event.reason;
-  const parts = [
-    `▣ DCP | Compacted ~${formatTokens(preview.tokensBefore)}`,
-    `\n\n${bar}`,
-    `\n░ summarized: ${preview.summarized}`,
-    `  ⣿ split prefix: ${preview.splitPrefix}`,
-    `  █ kept: ${preview.kept}`,
-    `\n→ Reason: ${reason}`,
+  const initiatorLabel = getInitiatorLabel(preview.initiator);
+  const reasonLabel = getReasonLabel(preview.initiator, event.reason);
+  const providerLabel = getSummaryProviderLabel(event.fromExtension);
+  const tokens = `~${formatTokens(preview.tokensBefore)}`;
+
+  const lines = [
+    `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel} (${tokens})`,
+    ``,
+    `${bar}`,
+    `${PRUNED} summarized: ${preview.summarized}  ${SPLIT_PREFIX} split prefix: ${preview.splitPrefix}  ${KEPT} kept: ${preview.kept}`,
   ];
-  return parts.join("");
+
+  const receiptLine = formatReceipt(receipt);
+  if (receiptLine) {
+    lines.push("", receiptLine);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatMinimalNotification(
+  initiator: CompactionInitiator,
+  hostReason: "manual" | "threshold" | "overflow",
+  fromExtension: boolean,
+  tokensBefore?: number,
+): string {
+  const initiatorLabel = getInitiatorLabel(initiator);
+  const reasonLabel = getReasonLabel(initiator, hostReason);
+  const providerLabel = getSummaryProviderLabel(fromExtension);
+  const tokens = tokensBefore != null ? ` (~${formatTokens(tokensBefore)})` : "";
+  return `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel}${tokens}`;
+}
+
+function formatReceipt(receipt?: CompactionReceipt): string | undefined {
+  if (!receipt) return undefined;
+  const parts: string[] = [];
+  if (receipt.fileRefs && receipt.fileRefs > 0) {
+    parts.push(`${receipt.fileRefs} file refs`);
+  }
+  if (receipt.protectedBlocks && receipt.protectedBlocks > 0) {
+    parts.push(`${receipt.protectedBlocks} protected`);
+  }
+  if (receipt.subagentArtifacts && receipt.subagentArtifacts > 0) {
+    parts.push(`${receipt.subagentArtifacts} subagent artifact${receipt.subagentArtifacts === 1 ? "" : "s"}`);
+  }
+  if (parts.length === 0) return undefined;
+  return `carried forward: ${parts.join(" · ")}`;
 }
 
 export function notifyCompaction(
   ctx: ExtensionContext,
   preview: CompactionPreview | undefined,
   event: SessionCompactEvent,
-  detailed: boolean,
+  config: DcpConfig,
+  receipt?: CompactionReceipt,
 ): void {
-  if (!preview || !detailed || !ctx.hasUI) return;
-  ctx.ui.notify(formatCompactionNotification(preview, event), "info");
+  if (config.notification === "off") return;
+  if (!ctx.hasUI) return;
+
+  const tokensBefore = preview?.tokensBefore ?? event.compactionEntry?.tokensBefore;
+
+  if (!preview) {
+    // Fallback: still emit a truthful one-line result.
+    const fallbackInitiator: CompactionInitiator = "pi-native";
+    const minimal = formatMinimalNotification(
+      fallbackInitiator,
+      event.reason,
+      event.fromExtension,
+      tokensBefore,
+    );
+    ctx.ui.notify(minimal, "info");
+    return;
+  }
+
+  if (config.notification === "minimal") {
+    const minimal = formatMinimalNotification(
+      preview.initiator,
+      event.reason,
+      event.fromExtension,
+      preview.tokensBefore,
+    );
+    ctx.ui.notify(minimal, "info");
+    return;
+  }
+
+  // detailed
+  ctx.ui.notify(formatCompactionNotification(preview, event, receipt), "info");
 }
 
 function countContextEntries(entries: Array<{ type: string }>): number {
   return entries.reduce((count, entry) => {
-    // Session headers and compaction metadata are not individual context parts.
     if (entry.type === "message" || entry.type === "custom_message" || entry.type === "branch_summary") {
       return count + 1;
     }
@@ -97,8 +190,6 @@ function allocateWidths(counts: number[], width: number, total: number): number[
   const widths = raw.map(Math.floor);
   let remaining = width - widths.reduce((sum, value) => sum + value, 0);
 
-  // Give leftover cells to the largest fractional parts, preserving the
-  // visible ordering of the three sections.
   const order = raw
     .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
     .sort((a, b) => b.fraction - a.fraction);
