@@ -72,6 +72,17 @@ describe("compaction bar", () => {
     expect(minimal).toContain("DCP summary");
   });
 
+  it("always includes receipt when counts are zero", () => {
+    const message = formatCompactionNotification(previewDcpCommand, {
+      type: "session_compact",
+      compactionEntry: { tokensBefore: 420_000 } as never,
+      fromExtension: true,
+      reason: "manual",
+      willRetry: false,
+    });
+    expect(message).toContain("receipt: 0 file refs · 0 protected · 0 subagent artifacts");
+  });
+
   it("includes receipt when provided", () => {
     const message = formatCompactionNotification(
       previewDcpCommand,
@@ -84,9 +95,20 @@ describe("compaction bar", () => {
       },
       { fileRefs: 6, protectedBlocks: 2, subagentArtifacts: 1 },
     );
-    expect(message).toContain("carried forward");
+    expect(message).toContain("receipt:");
     expect(message).toContain("6 file refs");
     expect(message).toContain("2 protected");
     expect(message).toContain("1 subagent artifact");
+  });
+
+  it("labels Pi default receipts as unavailable", () => {
+    const message = formatCompactionNotification(previewPiNative, {
+      type: "session_compact",
+      compactionEntry: { tokensBefore: 420_000 } as never,
+      fromExtension: false,
+      reason: "threshold",
+      willRetry: false,
+    });
+    expect(message).toContain("receipt: Pi default summary — DCP carry-forward details unavailable");
   });
 });

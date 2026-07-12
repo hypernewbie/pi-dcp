@@ -99,10 +99,7 @@ export function formatCompactionNotification(
     `${PRUNED} summarized: ${preview.summarized}  ${SPLIT_PREFIX} split prefix: ${preview.splitPrefix}  ${KEPT} kept: ${preview.kept}`,
   ];
 
-  const receiptLine = formatReceipt(receipt);
-  if (receiptLine) {
-    lines.push("", receiptLine);
-  }
+  lines.push("", formatReceipt(receipt, event.fromExtension));
 
   return lines.join("\n");
 }
@@ -120,20 +117,15 @@ export function formatMinimalNotification(
   return `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel}${tokens}`;
 }
 
-function formatReceipt(receipt?: CompactionReceipt): string | undefined {
-  if (!receipt) return undefined;
-  const parts: string[] = [];
-  if (receipt.fileRefs && receipt.fileRefs > 0) {
-    parts.push(`${receipt.fileRefs} file refs`);
+function formatReceipt(receipt: CompactionReceipt | undefined, fromExtension: boolean): string {
+  if (!fromExtension) {
+    return "receipt: Pi default summary — DCP carry-forward details unavailable";
   }
-  if (receipt.protectedBlocks && receipt.protectedBlocks > 0) {
-    parts.push(`${receipt.protectedBlocks} protected`);
-  }
-  if (receipt.subagentArtifacts && receipt.subagentArtifacts > 0) {
-    parts.push(`${receipt.subagentArtifacts} subagent artifact${receipt.subagentArtifacts === 1 ? "" : "s"}`);
-  }
-  if (parts.length === 0) return undefined;
-  return `carried forward: ${parts.join(" · ")}`;
+
+  const fileRefs = receipt?.fileRefs ?? 0;
+  const protectedBlocks = receipt?.protectedBlocks ?? 0;
+  const subagentArtifacts = receipt?.subagentArtifacts ?? 0;
+  return `receipt: ${fileRefs} file refs · ${protectedBlocks} protected · ${subagentArtifacts} subagent artifact${subagentArtifacts === 1 ? "" : "s"}`;
 }
 
 export function notifyCompaction(
