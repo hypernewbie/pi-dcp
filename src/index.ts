@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig, validateThreshold } from "./config.ts";
+import { loadConfig, loadPiCompactionSettings, validateThreshold } from "./config.ts";
 import { createTriggerState } from "./state.ts";
 import { buildNudge } from "./nudges.ts";
 import {
@@ -52,10 +52,11 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     }
 
     const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow ?? 0;
+    const piCompaction = loadPiCompactionSettings(ctx.cwd, ctx.isProjectTrusted());
     for (const warning of validateThreshold(
       state.config.triggers.endOfTurn.tokenThreshold,
       contextWindow,
-      undefined,
+      piCompaction,
       state.config.compaction.maxSummaryTokens,
     )) {
       notify(ctx, state.config, warning, "warning");

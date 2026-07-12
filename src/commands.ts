@@ -8,6 +8,7 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
   pi.registerCommand("dcp", {
     description: "pi-dcp: dynamic context pruning commands",
     handler: async (args, ctx) => {
+      if (!state.config.commands.enabled) return;
       const trimmed = args.trim();
       const [subcommand, ...rest] = trimmed.split(/\s+/);
       const restArgs = rest.join(" ").trim();

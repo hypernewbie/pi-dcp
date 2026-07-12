@@ -66,6 +66,11 @@ export interface CommandsConfig {
   enabled: boolean;
 }
 
+export interface PiCompactionSettings {
+  reserveTokens?: number;
+  keepRecentTokens?: number;
+}
+
 export interface LoadedConfig {
   config: DcpConfig;
   warnings: string[];

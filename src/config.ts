@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
-import type { DcpConfig, LoadedConfig, PartialDcpConfig, TokenThreshold } from "./types.ts";
+import type { DcpConfig, LoadedConfig, PartialDcpConfig, PiCompactionSettings, TokenThreshold } from "./types.ts";
 
 const GLOBAL_AGENT_DIR = join(homedir(), ".pi", "agent");
 const GLOBAL_CONFIG_PATH = join(GLOBAL_AGENT_DIR, "dcp.json");
@@ -287,6 +287,29 @@ export function resolveThreshold(threshold: TokenThreshold, contextWindow: numbe
   const pct = parseFloat(threshold);
   if (Number.isNaN(pct)) return 0;
   return Math.floor((pct / 100) * contextWindow);
+}
+
+/** Read Pi's own compaction settings for threshold diagnostics. */
+export function loadPiCompactionSettings(cwd: string, isProjectTrusted: boolean): PiCompactionSettings {
+  const global = readSettingsFile(join(GLOBAL_AGENT_DIR, "settings.json"));
+  const project = isProjectTrusted ? readSettingsFile(join(cwd, CONFIG_DIR_NAME, "settings.json")) : {};
+  return {
+    reserveTokens: typeof project.reserveTokens === "number" ? project.reserveTokens : global.reserveTokens,
+    keepRecentTokens: typeof project.keepRecentTokens === "number" ? project.keepRecentTokens : global.keepRecentTokens,
+  };
+}
+
+function readSettingsFile(path: string): PiCompactionSettings {
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = parseJsonc(readFileSync(path, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const compaction = (parsed as { compaction?: unknown }).compaction;
+    if (!compaction || typeof compaction !== "object" || Array.isArray(compaction)) return {};
+    return compaction as PiCompactionSettings;
+  } catch {
+    return {};
+  }
 }
 
 /**
