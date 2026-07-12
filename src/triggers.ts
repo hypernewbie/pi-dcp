@@ -8,7 +8,7 @@ import { notify, debug } from "./ui.ts";
 // trigger fires while a multi-step tool-call run is still active, this nudge is
 // re-sent after compaction completes so the interrupted task keeps going instead
 // of stopping cold. Gated by triggers.endOfTurn.autoContinue (default true).
-const AUTO_CONTINUE_PROMPT = "Continue task";
+const AUTO_CONTINUE_PROMPT = "Resuming from context compression, continue current task";
 
 export function shouldTriggerCompaction(
   config: DcpConfig,

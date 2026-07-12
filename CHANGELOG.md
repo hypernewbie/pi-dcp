@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.5
+
+- Changed the auto-continue resume prompt to `"Resuming from context compression, continue current task"` — gives the model explicit grounding for why it's being nudged, to try to avoid it drifting (e.g. treating a bare "continue" as license to move from planning into implementation).
+
 ## 0.4.4
 
 - Shortened the auto-continue resume prompt (`triggers.endOfTurn.autoContinue`) from a long explanatory sentence to a terse `"Continue task"` — confirmed better-behaved in practice than a verbose nudge.
