@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Box, Text } from "@earendil-works/pi-tui";
 import { loadConfig, loadPiCompactionSettings, validateThreshold } from "./config.ts";
 import { createTriggerState } from "./state.ts";
 import {
@@ -11,7 +12,7 @@ import { registerCommands } from "./commands.ts";
 import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
-import { createCompactionPreview, notifyCompaction } from "./compaction-bar.ts";
+import { createCompactionPreview, buildCompactionReceiptText } from "./compaction-bar.ts";
 import type { DcpRunInfo } from "./compaction-bar.ts";
 import { notify, debug } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
@@ -34,6 +35,19 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   };
 
   registerCommands(pi, state);
+
+  // Compaction receipts are rendered as durable custom session entries, not via
+  // ctx.ui.notify: compaction always truncates/rewrites the visible transcript
+  // from persisted branch entries right after this hook runs, which wipes any
+  // transient status line before a user can see it. A custom entry is part of
+  // that persisted branch and survives the rebuild.
+  pi.registerEntryRenderer<{ text: string }>("dcp-receipt", (entry, _options, theme) => {
+    const text = entry.data?.text;
+    if (!text) return undefined;
+    const box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
+    box.addChild(new Text(theme.fg("customMessageText", text), 0, 0));
+    return box;
+  });
 
   pi.on("session_start", (_event, ctx) => {
     const fresh = loadConfig(ctx.cwd, ctx.isProjectTrusted());
@@ -189,7 +203,14 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       }
     }
 
-    notifyCompaction(ctx, state.compactionPreview, event, state.config, dcpRun);
+    const receiptText = buildCompactionReceiptText(state.compactionPreview, event, state.config, dcpRun);
+    if (receiptText) {
+      try {
+        pi.appendEntry<{ text: string }>("dcp-receipt", { text: receiptText });
+      } catch {
+        // best effort - a rendering failure must never break compaction itself
+      }
+    }
 
     state.compactionPreview = undefined;
     state.triggerState.pendingInitiator = null;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- **Fixed: compaction receipt never rendered in real interactive sessions.** `ctx.ui.notify()` renders a transient status line in the chat pane; Pi always rewrites/rebuilds the visible transcript from persisted branch entries immediately after `session_compact` fires (compaction removes messages from history), which wiped the transient notify line before it could ever be seen. Confirmed by reproducing the exact live-session sequence end to end.
+- The receipt is now written via `pi.appendEntry("dcp-receipt", { text })` and rendered by a registered `registerEntryRenderer`, exactly like Pi's own built-in `[compaction]` summary box: a durable, persisted transcript entry that survives the rebuild and stays in scrollback/history afterwards.
+- `compaction-bar.ts`: replaced `notifyCompaction()` (side-effecting, called `ctx.ui.notify` directly) with `buildCompactionReceiptText()`, a pure function returning the receipt string (or `undefined` when `notification: "off"`). All existing text formatting (`formatCompactionNotification`/`formatMinimalNotification`) is unchanged.
+- Added an end-to-end regression test that runs the real registered `session_before_compact`/`session_compact` handlers and the real registered entry renderer (actual `@earendil-works/pi-tui` `Box`/`Text` components) to confirm a non-empty durable entry is produced and renders correctly — not just unit-testing the string formatters in isolation.
+- Added `@earendil-works/pi-tui` as a peer/dev dependency (Pi's extension loader aliases this package for extensions at runtime; only needed here for typechecking and tests).
+
 ## 0.4.0
 
 - **Corrected the compaction receipt to be faithful to OpenCode DCP.** The `0.3.x` "carried forward: N file refs · N protected · N subagent artifacts" receipt was not based on OpenCode DCP's actual notification and is replaced.

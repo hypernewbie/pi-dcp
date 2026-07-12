@@ -1,9 +1,5 @@
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
-import type {
-  ExtensionContext,
-  SessionBeforeCompactEvent,
-  SessionCompactEvent,
-} from "@earendil-works/pi-coding-agent";
+import type { SessionBeforeCompactEvent, SessionCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompactionInitiator, CompactionPreview, DcpConfig } from "./types.ts";
 import { estimateTextTokens } from "./utils.ts";
@@ -195,30 +191,35 @@ export function formatMinimalNotification(
   return `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel}`;
 }
 
-export function notifyCompaction(
-  ctx: ExtensionContext,
+/**
+ * Build the compaction receipt text, or undefined if notifications are off.
+ *
+ * This is rendered as a durable custom session entry (see `registerDcpReceiptRenderer`
+ * in index.ts), NOT via `ctx.ui.notify`. Compaction always truncates/rewrites the
+ * visible transcript from the persisted branch entries immediately after this hook
+ * runs, which wipes any transient status line before a user can ever see it. A
+ * custom entry is part of that persisted branch, so it survives the rebuild.
+ */
+export function buildCompactionReceiptText(
   preview: CompactionPreview | undefined,
   event: SessionCompactEvent,
   config: DcpConfig,
   dcpRun: DcpRunInfo | undefined,
-): void {
-  if (config.notification === "off") return;
-  if (!ctx.hasUI) return;
+): string | undefined {
+  if (config.notification === "off") return undefined;
 
   if (!preview) {
     // Fallback: no captured preview (should not normally happen), emit a
     // truthful minimal line using only what SessionCompactEvent guarantees.
     const label = event.fromExtension ? "DCP summary" : "Pi default summary";
-    ctx.ui.notify(`▣ PI COMPACT · ${event.reason} · ${label}`, "info");
-    return;
+    return `▣ PI COMPACT · ${event.reason} · ${label}`;
   }
 
   if (config.notification === "minimal") {
-    ctx.ui.notify(formatMinimalNotification(preview, event, dcpRun), "info");
-    return;
+    return formatMinimalNotification(preview, event, dcpRun);
   }
 
-  ctx.ui.notify(formatCompactionNotification(preview, event, dcpRun, config.compaction.showCompression), "info");
+  return formatCompactionNotification(preview, event, dcpRun, config.compaction.showCompression);
 }
 
 function countContextEntries(entries: Array<{ type: string }>): number {

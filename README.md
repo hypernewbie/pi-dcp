@@ -104,6 +104,8 @@ A big window is a *ceiling, not a target* — the absolute cap prevents filling 
 
 ## Compaction notifications
 
+The receipt is rendered as a durable custom entry in the transcript (not a transient status toast), so it survives the chat rebuild that always follows a compaction and stays visible in scrollback/history afterwards.
+
 When `notification: "detailed"` (the default) and pi-dcp itself performed the compression (a "DCP compression run"), the notification is faithful to OpenCode DCP's own shape:
 
 ```text
