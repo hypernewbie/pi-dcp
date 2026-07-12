@@ -12,7 +12,6 @@ import { registerCommands } from "./commands.ts";
 import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
-import { updateStatus } from "./ascii-bar.ts";
 import { createCompactionPreview, notifyCompaction } from "./compaction-bar.ts";
 import { notify, debug } from "./ui.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState, TriggerState } from "./types.ts";
@@ -47,7 +46,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     );
     resetTriggerState(state.triggerState);
     state.compactionPreview = undefined;
-    updateStatus(ctx, state.config);
 
     for (const warning of fresh.warnings) {
       notify(ctx, state.config, warning, "warning");
@@ -65,7 +63,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     if (shouldTriggerCompaction(state.config, state.triggerState, usage.tokens, usage.contextWindow)) {
       triggerCompaction(ctx, state.config, state.triggerState);
     }
-    updateStatus(ctx, state.config);
   });
 
   pi.on("session_compact", (event, ctx) => {
@@ -73,7 +70,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     recordCompactionCompleted(state.triggerState, usage?.tokens ?? null);
     notifyCompaction(ctx, state.compactionPreview, event, state.config.notification === "detailed");
     state.compactionPreview = undefined;
-    updateStatus(ctx, state.config);
   });
 
   pi.on("before_agent_start", (event, ctx) => {

@@ -8,7 +8,7 @@ A Pi extension inspired by OpenCode's DCP that gives you **controllable, configu
 - **Custom compaction summaries**: Replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files, user messages, and `<protect>` blocks.
 - **Context-efficiency nudges**: Inject a short system-prompt hint when context grows large.
 - **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls.
-- **ASCII context bars**: the footer and `/dcp` status show live usage; compaction notifications show summarized/split-prefix/kept parts using `░`, `⣿`, and `█`.
+- **Compaction part bar**: detailed compaction notifications show summarized/split-prefix/kept parts using `░`, `⣿`, and `█`.
 - **`/dcp` commands**: inspect status, trigger compaction with focus, enable/disable, and locate config files.
 
 ## Install

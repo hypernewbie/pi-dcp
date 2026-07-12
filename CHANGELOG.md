@@ -3,7 +3,6 @@
 ## 0.1.1
 
 - Added OpenCode-style compaction part-bar notifications (`░` summarized, `⣿` split-turn prefix, `█` kept).
-- Added live ASCII context usage bar to `/dcp` and the Pi footer status.
 - Preserved cumulative file tracking across extension-provided compactions.
 - Corrected recent-turn protection for short transcripts.
 - Added `dcp.schema.json` and proper glob matching.

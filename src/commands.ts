@@ -1,7 +1,6 @@
 import type { ExtensionCommandContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveThreshold } from "./utils.ts";
 import { triggerCompaction, resetTriggerState } from "./triggers.ts";
-import { updateStatus, renderAsciiBar, getMetrics } from "./ascii-bar.ts";
 import { notify, debug } from "./ui.ts";
 import type { RuntimeState } from "./types.ts";
 
@@ -93,22 +92,13 @@ async function showStatus(ctx: ExtensionCommandContext, state: RuntimeState): Pr
 
   const lines = [
     `pi-dcp: ${state.config.enabled ? "enabled" : "disabled"}`,
-  ];
-
-  const metrics = getMetrics(ctx, state.config);
-  if (metrics) {
-    lines.push(renderAsciiBar(metrics));
-  } else {
-    lines.push(`context: unknown`);
-  }
-
-  lines.push(
+    `context: ${usage?.tokens?.toLocaleString() ?? "unknown"} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens`,
     `end-of-turn threshold: ${endOfTurnThreshold?.toLocaleString() ?? "unknown"}`,
     `nudge threshold: ${nudgeThreshold?.toLocaleString() ?? "unknown"}`,
     `compaction cooldown: ${state.config.triggers.endOfTurn.cooldownTurns} turn(s)`,
     `custom summary: ${state.config.compaction.customSummary ? "on" : "off"}`,
     `context pruning: ${state.config.pruning.enabled ? "on (experimental)" : "off"}`,
-  );
+  ];
 
   const text = lines.join("\n");
   if (ctx.hasUI) {
@@ -117,5 +107,4 @@ async function showStatus(ctx: ExtensionCommandContext, state: RuntimeState): Pr
     console.log(text);
   }
 
-  updateStatus(ctx, state.config);
 }
