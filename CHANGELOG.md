@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.4
+
+- Shortened the auto-continue resume prompt (`triggers.endOfTurn.autoContinue`) from a long explanatory sentence to a terse `"Continue task"` — confirmed better-behaved in practice than a verbose nudge.
+
 ## 0.4.3
 
 - **Fixed: `session_before_compact` hijacked plain native `/compact` (and Pi's own threshold/overflow auto-compaction) with DCP's custom summarizer.** There is only one `session_before_compact` hook, shared by every compaction reason - manual `/compact`, Pi's native threshold/overflow auto-compact, and pi-dcp's own `/dcp compact`/dual-threshold trigger all fired it identically. `compaction.customSummary` (default `true`) applied to all of them, so a plain native `/compact` silently got DCP's own LLM-generated summary instead of Pi's. Now gated on `initiator !== "pi-native"`: DCP's custom summarizer only runs for compactions pi-dcp itself asked for. A plain native `/compact`, or Pi's own auto-compaction, is left completely untouched - pi-dcp still reports it honestly in the receipt (`PI COMPACT`, never a fake DCP run identity), it just doesn't rewrite what the user or Pi itself asked for.
