@@ -81,6 +81,7 @@ Example:
 | `/dcp status` | Show detailed status including last compaction |
 | `/dcp stats` | Show compaction/pruning stats (current branch) |
 | `/dcp compact [focus]` / `/dcp compress [focus]` | Trigger compaction now with optional focus text |
+| `/dcp compact_continue [focus]` / `/dcp compress_continue [focus]` | Same, but always resumes the interrupted task afterward (`ctx.compact()` aborts current work first) — regardless of `triggers.endOfTurn.autoContinue` |
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
 
@@ -103,7 +104,7 @@ This adapts automatically across windows with **zero per-model config**:
 
 A big window is a *ceiling, not a target* — the absolute cap prevents filling a 1M window (≈ $10/turn) just because the model allows it. Either threshold can be set to `null` to disable it; both `null` defers entirely to Pi's built-in compaction.
 
-The check runs on every turn (`turn_end`), including mid-task inside a long multi-step tool-call loop — not just once a task fully finishes. That's deliberate: on a large context window, waiting until the whole task settles could mean burning far past the absolute cost cap before pi-dcp ever gets a look-in. The tradeoff is that Pi's `ctx.compact()` always aborts whatever the agent is currently doing before it compacts (Pi has no safe mid-loop compact-and-continue primitive) — so a threshold crossed mid-task can cut a running tool-call loop short. `triggers.endOfTurn.autoContinue` (default `true`, **a Pi-only addition not present in upstream OpenCode DCP**) detects that case and automatically re-prompts to resume the interrupted task once compaction finishes, instead of leaving the run dead. Set it to `false` to compact-and-stop instead (you resume manually).
+The check runs on every turn (`turn_end`), including mid-task inside a long multi-step tool-call loop — not just once a task fully finishes. That's deliberate: on a large context window, waiting until the whole task settles could mean burning far past the absolute cost cap before pi-dcp ever gets a look-in. The tradeoff is that Pi's `ctx.compact()` always aborts whatever the agent is currently doing before it compacts (Pi has no safe mid-loop compact-and-continue primitive) — so a threshold crossed mid-task can cut a running tool-call loop short. `triggers.endOfTurn.autoContinue` (default `true`, **a Pi-only addition not present in upstream OpenCode DCP**) detects that case and automatically re-prompts to resume the interrupted task once compaction finishes, instead of leaving the run dead. Set it to `false` to compact-and-stop instead (you resume manually). This only applies to the automatic dual-threshold trigger — a plain manual `/dcp compact`/`/dcp compress` never auto-continues on its own; use `/dcp compact_continue`/`/dcp compress_continue` to always resume regardless of this setting.
 
 ## Compaction notifications
 

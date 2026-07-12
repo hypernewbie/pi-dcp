@@ -49,6 +49,7 @@ export function triggerCompaction(
   state: TriggerState,
   customInstructions?: string,
   initiator: CompactionInitiator = "dcp-command",
+  options?: { forceContinue?: boolean },
 ): void {
   if (state.isCompacting) return;
 
@@ -61,6 +62,7 @@ export function triggerCompaction(
   // Snapshot now: ctx.compact() is about to abort whatever is running. If the
   // agent was actively mid-run, remember it so we can resume it afterward.
   const wasActive = !ctx.isIdle();
+  const forceContinue = options?.forceContinue ?? false;
 
   debug(ctx, config, `Triggering compaction (initiator: ${initiator}, focus: ${focus.slice(0, 60)}...)`);
 
@@ -72,7 +74,15 @@ export function triggerCompaction(
       state.turnsSinceCompaction = 0;
       state.pendingInitiator = null;
 
-      if (config.triggers.endOfTurn.autoContinue && wasActive && !ctx.hasPendingMessages()) {
+      // forceContinue (explicit /dcp compact_continue or /dcp compress_continue)
+      // always resumes. Otherwise, auto-continue only applies to the automatic
+      // dual-threshold trigger (gated by triggers.endOfTurn.autoContinue) - a
+      // plain manual /dcp compact or /dcp compress never auto-resumes on its
+      // own; the user asked for exactly one thing (compact) and gets exactly
+      // that, nothing more, unless they explicitly asked for the _continue variant.
+      const shouldContinue =
+        forceContinue || (initiator === "dcp-dual-threshold" && config.triggers.endOfTurn.autoContinue && wasActive);
+      if (shouldContinue && !ctx.hasPendingMessages()) {
         pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
       }
     },

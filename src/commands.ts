@@ -18,7 +18,10 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
       switch (lc) {
         case "compact":
         case "compress":
-          return handleCompact(pi, ctx, state, restArgs);
+          return handleCompact(pi, ctx, state, restArgs, false);
+        case "compact_continue":
+        case "compress_continue":
+          return handleCompact(pi, ctx, state, restArgs, true);
         case "enable":
           return handleEnable(ctx, state);
         case "disable":
@@ -40,13 +43,19 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
   });
 }
 
-async function handleCompact(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: RuntimeState, args: string): Promise<void> {
+async function handleCompact(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  state: RuntimeState,
+  args: string,
+  forceContinue: boolean,
+): Promise<void> {
   if (!state.config.enabled) {
     notify(ctx, state.config, "pi-dcp is disabled", "warning");
     return;
   }
   const focus = args.trim() || undefined;
-  triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command");
+  triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command", { forceContinue });
 }
 
 async function handleEnable(ctx: ExtensionCommandContext, state: RuntimeState): Promise<void> {
@@ -87,6 +96,7 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
     "  /dcp status          Show current context/threshold status",
     "  /dcp stats           Show compaction/pruning stats (current branch)",
     "  /dcp compact|compress [focus] Compact now; optional focus guides the summary",
+    "  /dcp compact_continue|compress_continue [focus] Compact now, then resume the interrupted task afterward",
     "  /dcp enable          Enable pi-dcp for this session",
     "  /dcp disable         Disable pi-dcp for this session",
     "  /dcp config          Show config paths and load warnings",

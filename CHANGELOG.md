@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.6
+
+- **Added `/dcp compact_continue` and `/dcp compress_continue`** (aliases of each other, same `[focus]` argument as `/dcp compact`/`/dcp compress`): compact now, then always resume the interrupted task afterward, regardless of `triggers.endOfTurn.autoContinue`.
+- **Fixed: plain manual `/dcp compact`/`/dcp compress` no longer auto-continues.** `triggerCompaction()`'s auto-continue fallback was keyed only on `autoContinue` + "did this interrupt an active run", with no check on *who* triggered it - so a manual `/dcp compact` run while the agent was busy would auto-resume the task even though the user only asked to compact. Auto-continue (the config-gated fallback) now only applies to the automatic dual-threshold trigger; manual commands only continue when explicitly requested via the new `_continue` variants (`forceContinue`).
+
 ## 0.4.5
 
 - Changed the auto-continue resume prompt to `"Resuming from context compression, continue current task"` — gives the model explicit grounding for why it's being nudged, to try to avoid it drifting (e.g. treating a bare "continue" as license to move from planning into implementation).
