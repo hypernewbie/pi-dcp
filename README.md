@@ -1,5 +1,7 @@
 # pi-dcp — Pi Dynamic Context Pruning
 
+[![CI](https://github.com/hypernewbie/pi-dcp/actions/workflows/ci.yml/badge.svg)](https://github.com/hypernewbie/pi-dcp/actions/workflows/ci.yml)
+
 **Modified work based on [OpenCode Dynamic Context Pruning (DCP)](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning).**
 
 A Pi extension adapted from OpenCode's DCP that gives you **controllable, configurable context compaction and pruning** — especially for long agentic runs on large-context / expensive models.
@@ -22,7 +24,9 @@ pi install git:github.com/hypernewbie/pi-dcp
 Or clone and symlink for local development:
 
 ```bash
-ln -s "$(pwd)/src" ~/.pi/agent/extensions/pi-dcp
+git clone https://github.com/hypernewbie/pi-dcp.git
+ln -s "$PWD/pi-dcp" ~/.pi/agent/extensions/pi-dcp
+```
 ```
 
 ## Configuration
@@ -74,7 +78,7 @@ Example:
 
 | Command | Description |
 |---|---|
-| `/dcp` | Show status: enabled, current tokens, thresholds, settings |
+| `/dcp` | Show commands and current status: enabled, tokens, thresholds, settings |
 | `/dcp compact [focus]` | Trigger compaction now with optional focus text |
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
