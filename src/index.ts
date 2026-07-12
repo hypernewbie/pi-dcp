@@ -91,7 +91,18 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("turn_end", (_event, ctx) => {
+  // Check the dual threshold on agent_settled, NOT turn_end. Pi's "turn_end" fires
+  // after every individual assistant message + tool-result step within a single
+  // multi-step agentic run (turnIndex increments per step, well before the visible
+  // task finishes). ctx.compact() unconditionally aborts the current agent operation
+  // first (Pi's own compact() is designed as a standalone/manual action, not a
+  // mid-loop continuation point) - calling it from turn_end killed in-flight runs
+  // partway through a tool-call loop. "agent_settled" only fires once the whole run
+  // has fully finished and Pi guarantees no automatic retry/compaction/continuation
+  // will follow, which is the same point Pi's own native threshold/overflow
+  // auto-compaction checks itself (after agent_end, before the next prompt) - so this
+  // matches Pi's own compaction timing instead of racing its agent loop.
+  pi.on("agent_settled", (_event, ctx) => {
     if (!state.config.enabled || !state.config.triggers.endOfTurn.enabled) return;
 
     const usage = ctx.getContextUsage();

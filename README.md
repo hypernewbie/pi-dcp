@@ -102,6 +102,8 @@ This adapts automatically across windows with **zero per-model config**:
 
 A big window is a *ceiling, not a target* — the absolute cap prevents filling a 1M window (≈ $10/turn) just because the model allows it. Either threshold can be set to `null` to disable it; both `null` defers entirely to Pi's built-in compaction.
 
+The check runs once the agent has **fully settled** (the whole reply, including any multi-step tool-call loop, has finished and Pi guarantees nothing will auto-continue) — never mid-task. Pi's `ctx.compact()` always aborts whatever is currently running before it compacts, so pi-dcp deliberately does not check the threshold while the agent is still actively working; it waits for the same safe point Pi's own built-in threshold/overflow auto-compaction uses.
+
 ## Compaction notifications
 
 The receipt is rendered as a durable custom entry in the transcript (not a transient status toast), so it survives the chat rebuild that always follows a compaction and stays visible in scrollback/history afterwards.

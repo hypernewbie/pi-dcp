@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+
+- **Fixed: dual-threshold auto-compaction could abort a running multi-step tool-call loop mid-task.** The trigger was checked on Pi's `turn_end` event, which fires after *every individual* assistant message + tool-result step inside a single agentic run (well before the visible task is actually done). `ctx.compact()` unconditionally aborts the current agent operation before it compacts — it's a standalone/manual primitive (the same one used for a keyboard shortcut or `/compact`), not a checkpoint that lets a run continue afterward. Checking the threshold on `turn_end` meant a long autonomous run (many tool calls in flight) could be killed partway through the instant it crossed the threshold.
+- The check now runs on `agent_settled` instead, which Pi only fires once the whole run has fully finished and guarantees no automatic retry/compaction/continuation will follow — the same safe point Pi's own native threshold/overflow auto-compaction uses internally (checked once per fully-settled run, not per tool-call step). `ctx.compact()`'s internal abort is a no-op at that point since nothing is running.
+- No config or behavior change for simple (non-tool-loop) exchanges; `cooldownTurns` now counts fully-settled agent runs instead of internal turn steps, which is a closer match to its intended meaning.
+
 ## 0.4.1
 
 - **Fixed: compaction receipt never rendered in real interactive sessions.** `ctx.ui.notify()` renders a transient status line in the chat pane; Pi always rewrites/rebuilds the visible transcript from persisted branch entries immediately after `session_compact` fires (compaction removes messages from history), which wiped the transient notify line before it could ever be seen. Confirmed by reproducing the exact live-session sequence end to end.

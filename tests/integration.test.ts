@@ -49,7 +49,7 @@ describe("extension entry point", () => {
 
     const hookEvents = Object.keys(hooks).sort();
     expect(hookEvents).toContain("session_start");
-    expect(hookEvents).toContain("turn_end");
+    expect(hookEvents).toContain("agent_settled");
     expect(hookEvents).toContain("session_compact");
     expect(hookEvents).toContain("context");
     expect(hookEvents).toContain("session_before_compact");
