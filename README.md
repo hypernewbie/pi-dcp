@@ -60,10 +60,11 @@ Example:
   },
   "pruning": {
     "enabled": false,
+    "turnProtection": { "enabled": false, "turns": 4 },
     "deduplication": { "enabled": true },
     "purgeErrors": { "enabled": true, "turns": 4 }
   },
-  "protectedTools": ["task", "skill", "todowrite", "todoread", "write", "edit", "multiedit", "apply_patch"]
+  "protectedTools": ["write", "edit"]
 }
 ```
 

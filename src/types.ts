@@ -19,10 +19,14 @@ export interface PurgeErrorsConfig {
   protectedTools: string[] | null;
 }
 
+export interface TurnProtectionConfig {
+  enabled: boolean;
+  turns: number;
+}
+
 export interface PruningConfig {
   enabled: boolean;
-  maxMessages: number | null;
-  maxUserTurns: number | null;
+  turnProtection: TurnProtectionConfig;
   deduplication: DeduplicationConfig;
   purgeErrors: PurgeErrorsConfig;
 }
@@ -130,8 +134,6 @@ export interface PruneResult {
   stats: {
     deduplicated: number;
     errorsPurged: number;
-    droppedByMaxMessages: number;
-    droppedByMaxUserTurns: number;
   };
 }
 

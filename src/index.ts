@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadConfig } from "./config.ts";
+import { loadConfig, validateThreshold } from "./config.ts";
 import { createTriggerState } from "./state.ts";
 import { buildNudge } from "./nudges.ts";
 import {
@@ -50,6 +50,16 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     for (const warning of fresh.warnings) {
       notify(ctx, state.config, warning, "warning");
     }
+
+    const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow ?? 0;
+    for (const warning of validateThreshold(
+      state.config.triggers.endOfTurn.tokenThreshold,
+      contextWindow,
+      undefined,
+      state.config.compaction.maxSummaryTokens,
+    )) {
+      notify(ctx, state.config, warning, "warning");
+    }
   });
 
   pi.on("turn_end", (_event, ctx) => {
@@ -81,17 +91,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     if (!state.config.enabled || !state.config.pruning.enabled) return undefined;
 
     const result = pruneContext(event.messages, state.config.pruning, state.protection);
-    const total =
-      result.stats.deduplicated +
-      result.stats.errorsPurged +
-      result.stats.droppedByMaxMessages +
-      result.stats.droppedByMaxUserTurns;
+    const total = result.stats.deduplicated + result.stats.errorsPurged;
 
     if (total > 0) {
       debug(
         ctx,
         state.config,
-        `context pruning: ${result.stats.deduplicated} dedup, ${result.stats.errorsPurged} errors, ${result.stats.droppedByMaxMessages} maxMessages, ${result.stats.droppedByMaxUserTurns} maxUserTurns`,
+        `context pruning: ${result.stats.deduplicated} dedup, ${result.stats.errorsPurged} errors`,
       );
     }
 

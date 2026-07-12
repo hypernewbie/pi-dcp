@@ -2,12 +2,25 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
-import { parse as parseJsonc } from "jsonc-parser";
+import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 import type { DcpConfig, LoadedConfig, PartialDcpConfig, TokenThreshold } from "./types.ts";
 
 const GLOBAL_AGENT_DIR = join(homedir(), ".pi", "agent");
 const GLOBAL_CONFIG_PATH = join(GLOBAL_AGENT_DIR, "dcp.json");
 const PROJECT_CONFIG_DIR = join(CONFIG_DIR_NAME, "dcp.json");
+
+const TOP_LEVEL_KEYS = new Set([
+  "$schema",
+  "enabled",
+  "debug",
+  "notification",
+  "pruning",
+  "triggers",
+  "compaction",
+  "protectedTools",
+  "protectedFilePatterns",
+  "commands",
+]);
 
 export const DEFAULT_CONFIG: DcpConfig = {
   enabled: true,
@@ -16,8 +29,10 @@ export const DEFAULT_CONFIG: DcpConfig = {
 
   pruning: {
     enabled: false,
-    maxMessages: null,
-    maxUserTurns: null,
+    turnProtection: {
+      enabled: false,
+      turns: 4,
+    },
     deduplication: {
       enabled: true,
       protectedTools: null,
@@ -54,16 +69,9 @@ export const DEFAULT_CONFIG: DcpConfig = {
     protectTags: false,
   },
 
-  protectedTools: [
-    "task",
-    "skill",
-    "todowrite",
-    "todoread",
-    "write",
-    "edit",
-    "multiedit",
-    "apply_patch",
-  ],
+  // Pi-native equivalents of DCP's protected write/edit tools.
+  // Add project-specific tools explicitly in dcp.json.
+  protectedTools: ["write", "edit"],
   protectedFilePatterns: [],
 
   commands: {
@@ -91,11 +99,16 @@ export function loadConfig(cwd: string, isProjectTrusted: boolean): LoadedConfig
 function readLayer(path: string, warnings: string[]): PartialDcpConfig {
   try {
     const raw = readFileSync(path, "utf-8");
-    const parsed = parseJsonc(raw) as unknown;
+    const parseErrors: ParseError[] = [];
+    const parsed = parseJsonc(raw, parseErrors) as unknown;
+    if (parseErrors.length > 0) {
+      warnings.push(`Config ${path} contains ${parseErrors.length} JSONC parse error(s); invalid values may be ignored.`);
+    }
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       warnings.push(`Config ${path} is not a JSON object; ignoring.`);
       return {};
     }
+    warnUnknownKeys(parsed as Record<string, unknown>, TOP_LEVEL_KEYS, path, warnings);
     return parsed as PartialDcpConfig;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -150,6 +163,9 @@ function mergePruning(base: DcpConfig["pruning"], override: PartialDcpConfig["pr
   return {
     ...base,
     ...override,
+    turnProtection: override.turnProtection
+      ? { ...base.turnProtection, ...override.turnProtection }
+      : base.turnProtection,
     deduplication: override.deduplication
       ? { ...base.deduplication, ...override.deduplication }
       : base.deduplication,
@@ -193,7 +209,74 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
     merged.triggers.nudge.force = "soft";
   }
 
+  merged.triggers.endOfTurn.tokenThreshold = normalizeThreshold(
+    merged.triggers.endOfTurn.tokenThreshold,
+    DEFAULT_CONFIG.triggers.endOfTurn.tokenThreshold,
+    "triggers.endOfTurn.tokenThreshold",
+    warnings,
+  );
+  merged.triggers.nudge.tokenThreshold = normalizeThreshold(
+    merged.triggers.nudge.tokenThreshold,
+    DEFAULT_CONFIG.triggers.nudge.tokenThreshold,
+    "triggers.nudge.tokenThreshold",
+    warnings,
+  );
+  merged.triggers.endOfTurn.cooldownTurns = normalizeInteger(
+    merged.triggers.endOfTurn.cooldownTurns,
+    DEFAULT_CONFIG.triggers.endOfTurn.cooldownTurns,
+    "triggers.endOfTurn.cooldownTurns",
+    warnings,
+  );
+  merged.triggers.nudge.frequency = normalizeInteger(
+    merged.triggers.nudge.frequency,
+    DEFAULT_CONFIG.triggers.nudge.frequency,
+    "triggers.nudge.frequency",
+    warnings,
+  );
+  merged.compaction.maxSummaryTokens = normalizeInteger(
+    merged.compaction.maxSummaryTokens,
+    DEFAULT_CONFIG.compaction.maxSummaryTokens,
+    "compaction.maxSummaryTokens",
+    warnings,
+  );
+  merged.pruning.turnProtection.turns = normalizeInteger(
+    merged.pruning.turnProtection.turns,
+    DEFAULT_CONFIG.pruning.turnProtection.turns,
+    "pruning.turnProtection.turns",
+    warnings,
+  );
+  merged.pruning.purgeErrors.turns = normalizeInteger(
+    merged.pruning.purgeErrors.turns,
+    DEFAULT_CONFIG.pruning.purgeErrors.turns,
+    "pruning.purgeErrors.turns",
+    warnings,
+  );
+
   return merged;
+}
+
+function normalizeThreshold(
+  value: unknown,
+  fallback: TokenThreshold,
+  path: string,
+  warnings: string[],
+): TokenThreshold {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === "string" && /^(?:100|[0-9]{1,2}(?:\\.[0-9]+)?)%$/.test(value)) return value as TokenThreshold;
+  warnings.push(`Invalid ${path}; using ${String(fallback)}.`);
+  return fallback;
+}
+
+function normalizeInteger(value: unknown, fallback: number, path: string, warnings: string[]): number {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  warnings.push(`Invalid ${path}; using ${fallback}.`);
+  return fallback;
+}
+
+function warnUnknownKeys(value: Record<string, unknown>, allowed: Set<string>, path: string, warnings: string[]): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) warnings.push(`Unknown config key ${path}.${key}; ignored by pi-dcp.`);
+  }
 }
 
 /**

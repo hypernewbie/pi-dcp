@@ -2,9 +2,6 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { PruningConfig, PruneResult, ResolvedProtection } from "./types.ts";
 import { deduplicate } from "./strategies/deduplication.ts";
 import { purgeErrors } from "./strategies/purge-errors.ts";
-import { applyRecencyCaps } from "./strategies/recency.ts";
-
-const RECENT_USER_TURNS_PROTECTED = 2;
 
 export function pruneContext(
   messages: AgentMessage[],
@@ -16,7 +13,8 @@ export function pruneContext(
   let errorsPurged = 0;
 
   if (config.deduplication.enabled) {
-    const result = deduplicate(working, protection, RECENT_USER_TURNS_PROTECTED);
+    const recentTurns = config.turnProtection.enabled ? config.turnProtection.turns : 0;
+    const result = deduplicate(working, protection, recentTurns);
     working = result.messages;
     deduplicated = result.deduplicated;
   }
@@ -27,15 +25,11 @@ export function pruneContext(
     errorsPurged = result.purged;
   }
 
-  const recency = applyRecencyCaps(working, config.maxMessages, config.maxUserTurns);
-
   return {
-    messages: recency.messages,
+    messages: working,
     stats: {
       deduplicated,
       errorsPurged,
-      droppedByMaxMessages: recency.droppedByMaxMessages,
-      droppedByMaxUserTurns: recency.droppedByMaxUserTurns,
     },
   };
 }

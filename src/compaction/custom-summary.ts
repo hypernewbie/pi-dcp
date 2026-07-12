@@ -182,18 +182,5 @@ function extractFileOpsFromMessage(
     if (toolCall.name === "read" && directPath) read.add(directPath);
     if ((toolCall.name === "write" || toolCall.name === "edit") && directPath) modified.add(directPath);
 
-    if (toolCall.name === "multiedit" && Array.isArray(args.edits)) {
-      for (const edit of args.edits) {
-        if (edit && typeof edit === "object" && typeof (edit as { path?: unknown }).path === "string") {
-          modified.add((edit as { path: string }).path);
-        }
-      }
-    }
-
-    if (toolCall.name === "apply_patch" && typeof args.patchText === "string") {
-      for (const match of args.patchText.matchAll(/^\+\+\+ b\/(.+)$/gm)) {
-        modified.add(match[1]);
-      }
-    }
   }
 }

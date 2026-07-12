@@ -4,8 +4,10 @@
 
 - Added OpenCode-style compaction part-bar notifications (`░` summarized, `⣿` split-turn prefix, `█` kept).
 - Preserved cumulative file tracking across extension-provided compactions.
-- Corrected recent-turn protection for short transcripts.
-- Added `dcp.schema.json` and proper glob matching.
+- Made recent-turn protection explicit and disabled by default, matching DCP.
+- Removed unsafe generic message-count truncation from the Pi context tree.
+- Restricted defaults to Pi-native `write` and `edit` tools.
+- Added config validation warnings and `dcp.schema.json`.
 
 ## 0.1.0
 

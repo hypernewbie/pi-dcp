@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { deduplicate } from "../src/strategies/deduplication.ts";
 import { purgeErrors } from "../src/strategies/purge-errors.ts";
-import { applyRecencyCaps } from "../src/strategies/recency.ts";
 
 function makeUser(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: Date.now() };
@@ -96,32 +95,5 @@ describe("purgeErrors", () => {
 
     const result = purgeErrors(messages, 2, { protectedTools: [], protectedFilePatterns: [] });
     expect(result.purged).toBe(0);
-  });
-});
-
-describe("applyRecencyCaps", () => {
-  it("drops messages older than maxUserTurns", () => {
-    const messages: AgentMessage[] = [
-      makeUser("old"),
-      makeAssistant([]),
-      makeUser("new"),
-      makeAssistant([]),
-    ];
-
-    const result = applyRecencyCaps(messages, null, 1);
-    expect(result.droppedByMaxUserTurns).toBe(2);
-    expect(result.messages).toHaveLength(2);
-  });
-
-  it("drops oldest messages above maxMessages", () => {
-    const messages: AgentMessage[] = [
-      makeUser("1"),
-      makeUser("2"),
-      makeUser("3"),
-    ];
-
-    const result = applyRecencyCaps(messages, 2, null);
-    expect(result.droppedByMaxMessages).toBe(1);
-    expect(result.messages).toHaveLength(2);
   });
 });

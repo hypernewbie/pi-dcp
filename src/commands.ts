@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveThreshold } from "./utils.ts";
 import { triggerCompaction, resetTriggerState } from "./triggers.ts";
-import { notify, debug } from "./ui.ts";
+import { notify } from "./ui.ts";
 import type { RuntimeState } from "./types.ts";
 
 export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
@@ -69,15 +69,6 @@ async function handleConfig(ctx: ExtensionCommandContext, state: RuntimeState): 
     ctx.ui.notify(text, "info");
   } else {
     console.log(text);
-  }
-
-  if (ctx.hasUI) {
-    try {
-      const edited = await ctx.ui.editor("pi-dcp config", text);
-      debug(ctx, state.config, `editor returned: ${edited === undefined ? "undefined" : "text"}`);
-    } catch {
-      // ignore editor cancellation
-    }
   }
 }
 

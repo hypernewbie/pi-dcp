@@ -31,10 +31,17 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean", "default": false },
-        "maxMessages": { "type": ["integer", "null"], "minimum": 1 },
-        "maxUserTurns": { "type": ["integer", "null"], "minimum": 1 },
+        "turnProtection": { "$ref": "#/$defs/turnProtection" },
         "deduplication": { "$ref": "#/$defs/deduplication" },
         "purgeErrors": { "$ref": "#/$defs/purgeErrors" }
+      }
+    },
+    "turnProtection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "turns": { "type": "integer", "minimum": 0, "default": 4 }
       }
     },
     "deduplication": {
