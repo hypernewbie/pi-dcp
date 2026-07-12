@@ -15,6 +15,7 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
 
       switch (subcommand.toLowerCase()) {
         case "compact":
+        case "compress":
           return handleCompact(ctx, state, restArgs);
         case "enable":
           return handleEnable(ctx, state);
@@ -80,7 +81,7 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
     "pi-dcp commands:",
     "  /dcp                 Show this help and current status",
     "  /dcp status          Show current context/threshold status",
-    "  /dcp compact [focus] Compact now; optional focus guides the summary",
+    "  /dcp compact|compress [focus] Compact now; optional focus guides the summary",
     "  /dcp enable          Enable pi-dcp for this session",
     "  /dcp disable         Disable pi-dcp for this session",
     "  /dcp config          Show config paths and load warnings",

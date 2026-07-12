@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Added `/dcp compress [focus]` as an alias for `/dcp compact [focus]`.
+
 ## 0.2.0
 
 - **Dual-threshold compaction model.** Compaction fires at the lower of `tokenThresholdPercent` (default `73%` of window) and `tokenThresholdAbsolute` (default `450000`). Protects the wall on small windows and caps cost on huge windows, with zero per-model config.

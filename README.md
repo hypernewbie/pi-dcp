@@ -73,7 +73,7 @@ Example:
 | Command | Description |
 |---|---|
 | `/dcp` | Show commands and current status: enabled, tokens, thresholds, settings |
-| `/dcp compact [focus]` | Trigger compaction now with optional focus text |
+| `/dcp compact [focus]` / `/dcp compress [focus]` | Trigger compaction now with optional focus text |
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
 | `/dcp status` | Alias for `/dcp` |
