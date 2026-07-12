@@ -1,6 +1,8 @@
 # pi-dcp — Pi Dynamic Context Pruning
 
-A Pi extension inspired by OpenCode's DCP that gives you **controllable, configurable context compaction and pruning** — especially for long agentic runs on large-context / expensive models.
+**Modified work based on [OpenCode Dynamic Context Pruning (DCP)](https://github.com/Opencode-DCP/opencode-dynamic-context-pruning).**
+
+A Pi extension adapted from OpenCode's DCP that gives you **controllable, configurable context compaction and pruning** — especially for long agentic runs on large-context / expensive models.
 
 ## What it does
 
@@ -84,4 +86,4 @@ On cache-heavy providers, mutating messages every turn can invalidate the prompt
 
 ## License
 
-MIT
+AGPL-3.0-or-later. See [`LICENSE`](./LICENSE) and [`NOTICE`](./NOTICE) for the original project attribution and modification notice.

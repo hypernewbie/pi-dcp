@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Relicensed under AGPL-3.0-or-later.
+- Added OpenCode DCP attribution and modified-work notice.
+- Ported DCP's duplicate grouping and string-only failed-input purge semantics to Pi's message format.
+
 ## 0.1.1
 
 - Added OpenCode-style compaction part-bar notifications (`░` summarized, `⣿` split-turn prefix, `█` kept).

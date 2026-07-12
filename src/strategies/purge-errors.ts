@@ -2,13 +2,20 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { cloneMessages, matchesAnyPattern, recentTurnsBoundary } from "../utils.ts";
 import type { ResolvedProtection } from "../types.ts";
 
+/**
+ * Adapted from OpenCode DCP's lib/strategies/purge-errors.ts and
+ * lib/messages/prune.ts.
+ *
+ * For old failed calls, preserve the error result but replace only string
+ * inputs. Pi stores calls and results in separate messages, so the input lives
+ * in the matching assistant toolCall block.
+ */
 export interface PurgeErrorsResult {
   messages: AgentMessage[];
   purged: number;
 }
 
-const PLACEHOLDER = (toolName: string) =>
-  `[input removed due to failed ${toolName} call; error message preserved above]`;
+const PLACEHOLDER = "[input removed due to failed tool call]";
 
 export function purgeErrors(
   messages: AgentMessage[],
@@ -17,48 +24,46 @@ export function purgeErrors(
 ): PurgeErrorsResult {
   let purged = 0;
   const out = cloneMessages(messages);
+  const turnThreshold = Math.max(1, turns);
+  const recentBoundary = recentTurnsBoundary(out, turnThreshold);
 
-  if (turns <= 0) return { messages: out, purged: 0 };
+  for (let index = 0; index < out.length; index++) {
+    const result = out[index];
+    if (result.role !== "toolResult" || !result.isError) continue;
+    if (index >= recentBoundary) continue;
+    if (matchesAnyPattern(result.toolName, protection.protectedTools)) continue;
 
-  const recentBoundary = recentTurnsBoundary(out, turns);
-
-  // Find toolResult messages that are errors and older than the boundary.
-  for (let i = 0; i < out.length; i++) {
-    const msg = out[i];
-    if (msg.role !== "toolResult" || !msg.isError) continue;
-    if (recentBoundary >= 0 && i >= recentBoundary) continue;
-    if (matchesAnyPattern(msg.toolName, protection.protectedTools)) continue;
-
-    // Find the corresponding assistant toolCall and replace its arguments.
-    const toolCall = findToolCall(out, msg.toolCallId);
+    const toolCall = findToolCall(out, result.toolCallId);
     if (!toolCall) continue;
 
     const path = extractPath(toolCall.arguments);
     if (path && matchesAnyPattern(path, protection.protectedFilePatterns)) continue;
 
-    toolCall.arguments = { __dcp_purged__: PLACEHOLDER(msg.toolName) };
-    purged++;
+    let changed = false;
+    for (const key of Object.keys(toolCall.arguments)) {
+      if (typeof toolCall.arguments[key] === "string") {
+        toolCall.arguments[key] = PLACEHOLDER;
+        changed = true;
+      }
+    }
+    if (changed) purged++;
   }
 
   return { messages: out, purged };
 }
 
 function findToolCall(messages: AgentMessage[], toolCallId: string) {
-  for (const msg of messages) {
-    if (msg.role !== "assistant") continue;
-    for (const block of msg.content) {
-      if (block.type === "toolCall" && block.id === toolCallId) {
-        return block;
-      }
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const block of message.content) {
+      if (block.type === "toolCall" && block.id === toolCallId) return block;
     }
   }
   return undefined;
 }
 
 function extractPath(args: Record<string, unknown>): string | undefined {
-  if (args && typeof args === "object") {
-    if (typeof args.path === "string") return args.path;
-    if (typeof args.filePath === "string") return args.filePath;
-  }
+  if (typeof args.path === "string") return args.path;
+  if (typeof args.filePath === "string") return args.filePath;
   return undefined;
 }

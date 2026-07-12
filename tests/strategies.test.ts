@@ -51,6 +51,27 @@ describe("deduplicate", () => {
     }
   });
 
+  it("prunes every older call in a duplicate group", () => {
+    const messages: AgentMessage[] = [
+      makeAssistant([{ id: "tc1", name: "read", arguments: { path: "/x" } }]),
+      makeResult("tc1", "A"),
+      makeAssistant([{ id: "tc2", name: "read", arguments: { path: "/x" } }]),
+      makeResult("tc2", "A"),
+      makeAssistant([{ id: "tc3", name: "read", arguments: { path: "/x" } }]),
+      makeResult("tc3", "A"),
+    ];
+
+    const result = deduplicate(messages, { protectedTools: [], protectedFilePatterns: [] }, 0);
+    expect(result.deduplicated).toBe(2);
+    for (const index of [1, 3]) {
+      const toolResult = result.messages[index];
+      expect(toolResult.role).toBe("toolResult");
+      if (toolResult.role === "toolResult" && toolResult.content[0].type === "text") {
+        expect(toolResult.content[0].text).toContain("removed to save context");
+      }
+    }
+  });
+
   it("skips protected tools", () => {
     const messages: AgentMessage[] = [
       makeUser("task"),
@@ -82,7 +103,7 @@ describe("purgeErrors", () => {
     const toolCall = result.messages[1];
     expect(toolCall.role).toBe("assistant");
     if (toolCall.role === "assistant") {
-      expect(toolCall.content[0].type === "toolCall" && toolCall.content[0].arguments.__dcp_purged__).toContain("input removed");
+      expect(toolCall.content[0].type === "toolCall" && toolCall.content[0].arguments.command).toBe("[input removed due to failed tool call]");
     }
   });
 

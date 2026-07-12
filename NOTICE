@@ -1,0 +1,13 @@
+pi-dcp is a modified Pi adaptation of OpenCode Dynamic Context Pruning (DCP).
+
+Original project:
+  OpenCode Dynamic Context Pruning
+  Copyright (c) tarquinen and contributors
+  https://github.com/Opencode-DCP/opencode-dynamic-context-pruning
+
+The original project is licensed under the GNU Affero General Public License,
+version 3 or later. This project is distributed under the same license.
+
+pi-dcp changes the host integration and architecture for Pi's extension API,
+session tree, context event, and native compaction lifecycle. It is not an
+official OpenCode project.
