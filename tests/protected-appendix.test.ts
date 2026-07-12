@@ -40,6 +40,7 @@ const baseConfig: CompactionConfig = {
   protectUserMessages: false,
   maxProtectedTokens: 24000,
   preserveSubagentResults: true,
+  showCompression: false,
 };
 
 const protection: ResolvedProtection = {

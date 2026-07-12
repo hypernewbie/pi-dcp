@@ -12,7 +12,7 @@ A Pi extension adapted from OpenCode's DCP that gives you **controllable, config
 - **Custom compaction summaries**: Replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files, user messages, and artifact references. Bounded input budget prevents giant outputs from wrecking compaction.
 - **Subagent result preservation**: Parent-visible `subagent` results (conclusions + artifact paths) survive compaction without importing full child transcripts.
 - **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls (subagent results are exempt).
-- **Truthful compaction notifications**: `░ ⣿ █` part bar with DCP vs Pi provenance (`DCP COMPRESS · command · DCP summary` vs `PI COMPACT · manual · Pi default summary`) and a compact receipt of what was carried forward.
+- **OpenCode-faithful compression receipt**: for genuine DCP compressions, a cumulative `▣ DCP | -X removed, +Y summary` header, a per-run `▣ Compression #N` line, `░ ⣿ █` part bar, and `→ Items:`/`→ Origin:` lines — same shape as OpenCode DCP's own notification. Native Pi compactions are labelled `PI COMPACT` and never claim a fake DCP run identity.
 - **Honest stats**: `/dcp stats` shows persistent, branch-local compaction/pruning counts via custom session entries.
 - **`/dcp` commands**: inspect status, trigger compaction with focus, enable/disable, and locate config files.
 
@@ -59,7 +59,8 @@ Example:
     "maxSummaryTokens": 8192,
     "maxProtectedTokens": 24000,
     "preserveSubagentResults": true,
-    "protectUserMessages": false
+    "protectUserMessages": false,
+    "showCompression": false
   },
   "pruning": {
     "enabled": false,
@@ -100,6 +101,33 @@ This adapts automatically across windows with **zero per-model config**:
 | 1M | 730k | 450k | 450k | absolute (cost) |
 
 A big window is a *ceiling, not a target* — the absolute cap prevents filling a 1M window (≈ $10/turn) just because the model allows it. Either threshold can be set to `null` to disable it; both `null` defers entirely to Pi's built-in compaction.
+
+## Compaction notifications
+
+When `notification: "detailed"` (the default) and pi-dcp itself performed the compression (a "DCP compression run"), the notification is faithful to OpenCode DCP's own shape:
+
+```text
+▣ DCP | -~248K removed, +~6.1K summary
+
+│░░░░░░░░⣿⣿████████████████████████│
+▣ Compression #4 -~62K removed, +~6.1K summary
+→ Items: 38 messages and 9 tool calls compressed
+→ Origin: command, focus: "preserve the auth migration decision"
+```
+
+`-X removed` / `+Y summary` are estimated with Pi's own token estimator (same char/4 heuristic Pi uses internally), not billed/exact tokens. `Compression #N` and the cumulative removed total are pi-dcp's own persisted counters — they only increment when pi-dcp's own summarizer actually produced the committed summary (`fromExtension: true`). `→ Origin` and any focus text are only shown for a real DCP-initiated run, and the default dual-threshold focus text is never shown as a fake "topic" — only an explicit `/dcp compress <focus>` argument is.
+
+When the compaction was Pi-native (native `/compact`, threshold, or overflow), or DCP asked for it but its summarizer fell back to Pi's own default summary, the notification never claims a `Compression #N` identity or cumulative totals DCP didn't produce:
+
+```text
+▣ PI COMPACT · threshold · Pi default summary
+
+│░░░░░░░░████████████████████████████████████████████│
+→ Removed: ~62K, Summary: ~6.1K
+→ Items: 38 messages and 9 tool calls compacted
+```
+
+`compaction.showCompression` (default `false`, matching OpenCode) controls whether the actual committed summary text is included in the notification.
 
 ## Why context-event pruning is off by default
 

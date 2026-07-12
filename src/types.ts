@@ -57,6 +57,8 @@ export interface CompactionConfig {
   maxProtectedTokens: number;
   /** Whether to preserve parent-visible subagent results */
   preserveSubagentResults: boolean;
+  /** Show the actual committed summary text in the compaction receipt (OpenCode: showCompression, default off) */
+  showCompression: boolean;
 }
 
 export interface CommandsConfig {
@@ -86,6 +88,19 @@ export interface CompactionPreview {
   reason: "manual" | "threshold" | "overflow";
   /** Who initiated the compaction */
   initiator: CompactionInitiator;
+  /**
+   * OpenCode-DCP-faithful compression facts, computed from the actual
+   * messages being removed this run. Available for ANY compaction
+   * (DCP-triggered or Pi-native), since these are facts about what Pi is
+   * about to discard, not about who wrote the resulting summary.
+   */
+  removedTokensThisRun: number;
+  messagesCompressed: number;
+  toolsCompressed: number;
+  /** Focus/custom instructions passed to this compaction, if any. */
+  focus?: string;
+  /** True only when the user explicitly supplied focus text (e.g. `/dcp compress <focus>`). */
+  focusIsUserSupplied: boolean;
 }
 
 export interface LastCompactionInfo {
@@ -100,6 +115,15 @@ export interface LastCompactionInfo {
   fileRefs?: number;
   protectedBlocks?: number;
   subagentArtifacts?: number;
+  // OpenCode-DCP-faithful compression receipt fields.
+  removedTokensThisRun?: number;
+  summaryTokensThisRun?: number;
+  messagesCompressed?: number;
+  toolsCompressed?: number;
+  splitPrefixMessages?: number;
+  /** Only present when fromExtension was true this run (a genuine DCP compression). */
+  runNumber?: number;
+  cumulativeRemovedTokens?: number;
 }
 
 export interface RuntimeState {
@@ -134,6 +158,8 @@ export interface TriggerState {
   turnsSinceCompaction: number;
   tokensAtLastCompaction: number | null;
   pendingInitiator: CompactionInitiator | null;
+  /** True only when the pending trigger carries an explicit user-supplied focus string. */
+  pendingFocusIsExplicit: boolean;
   lastCompaction?: LastCompactionInfo;
 }
 

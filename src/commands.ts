@@ -142,12 +142,24 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
     lines.push(
       `last compaction: ${initiatorLabel} · ${last.reason} · ${provider} · ${last.tokensBefore.toLocaleString()} tokens before`,
     );
+    if (last.runNumber !== undefined && last.cumulativeRemovedTokens !== undefined) {
+      lines.push(
+        `  compression #${last.runNumber}: -~${formatK(last.removedTokensThisRun)} removed, +~${formatK(last.summaryTokensThisRun)} summary (cumulative removed: ~${formatK(last.cumulativeRemovedTokens)})`,
+      );
+    } else if (last.removedTokensThisRun !== undefined) {
+      lines.push(
+        `  removed: ~${formatK(last.removedTokensThisRun)}, summary: ~${formatK(last.summaryTokensThisRun)}`,
+      );
+    }
+    if (last.messagesCompressed !== undefined && last.toolsCompressed !== undefined) {
+      lines.push(`  items: ${last.messagesCompressed} messages, ${last.toolsCompressed} tool calls`);
+    }
     if (last.fileRefs || last.protectedBlocks || last.subagentArtifacts) {
       const parts: string[] = [];
       if (last.fileRefs) parts.push(`${last.fileRefs} file refs`);
       if (last.protectedBlocks) parts.push(`${last.protectedBlocks} protected`);
       if (last.subagentArtifacts) parts.push(`${last.subagentArtifacts} subagent artifacts`);
-      if (parts.length > 0) lines.push(`carried forward: ${parts.join(" · ")}`);
+      if (parts.length > 0) lines.push(`  carried forward: ${parts.join(" · ")}`);
     }
   }
 
@@ -158,6 +170,13 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
   }
 
   return lines;
+}
+
+function formatK(tokens: number | undefined): string {
+  if (tokens === undefined) return "?";
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `${tokens}`;
 }
 
 function display(ctx: ExtensionCommandContext, text: string): void {

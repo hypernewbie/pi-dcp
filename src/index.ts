@@ -12,6 +12,7 @@ import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
 import { createCompactionPreview, notifyCompaction } from "./compaction-bar.ts";
+import type { DcpRunInfo } from "./compaction-bar.ts";
 import { notify, debug } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
@@ -99,7 +100,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const summaryProvider = event.fromExtension ? ("dcp" as const) : ("pi" as const);
     const tokensBefore = state.compactionPreview?.tokensBefore ?? event.compactionEntry?.tokensBefore ?? 0;
 
-    // Build receipt from compactionEntry details
     const details = event.compactionEntry?.details as
       | {
           readFiles?: unknown;
@@ -108,6 +108,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
           protectedBlocks?: unknown;
           fileRefs?: unknown;
           subagentArtifacts?: unknown;
+          fromDcp?: unknown;
+          runNumber?: unknown;
+          cumulativeRemovedTokens?: unknown;
+          removedTokensThisRun?: unknown;
+          summaryTokensThisRun?: unknown;
+          messagesCompressed?: unknown;
+          toolsCompressed?: unknown;
         }
       | undefined;
 
@@ -126,11 +133,12 @@ export default function dcpExtension(pi: ExtensionAPI): void {
           ? (details?.artifacts as unknown[]).length
           : undefined;
 
-    const receipt = {
-      fileRefs: fileRefsCount,
-      protectedBlocks,
-      subagentArtifacts,
-    };
+    // A genuine DCP compression run only exists when Pi actually committed the
+    // extension-provided summary AND that summary carried DCP's run counters.
+    const dcpRun: DcpRunInfo | undefined =
+      event.fromExtension && details?.fromDcp === true && typeof details.runNumber === "number" && typeof details.cumulativeRemovedTokens === "number"
+        ? { runNumber: details.runNumber, cumulativeRemovedTokens: details.cumulativeRemovedTokens }
+        : undefined;
 
     // Record last compaction for /dcp status
     const reasonLabel = initiator === "dcp-command" ? "command" : initiator === "dcp-dual-threshold" ? "dual-threshold" : hostReason;
@@ -145,6 +153,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       fileRefs: fileRefsCount,
       protectedBlocks,
       subagentArtifacts,
+      removedTokensThisRun: state.compactionPreview?.removedTokensThisRun,
+      summaryTokensThisRun: typeof details?.summaryTokensThisRun === "number" ? details.summaryTokensThisRun : undefined,
+      messagesCompressed: state.compactionPreview?.messagesCompressed,
+      toolsCompressed: state.compactionPreview?.toolsCompressed,
+      splitPrefixMessages: state.compactionPreview?.splitPrefix,
+      runNumber: dcpRun?.runNumber,
+      cumulativeRemovedTokens: dcpRun?.cumulativeRemovedTokens,
     };
 
     // Stats persistence
@@ -174,7 +189,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       }
     }
 
-    notifyCompaction(ctx, state.compactionPreview, event, state.config, receipt);
+    notifyCompaction(ctx, state.compactionPreview, event, state.config, dcpRun);
 
     state.compactionPreview = undefined;
     state.triggerState.pendingInitiator = null;
@@ -224,7 +239,9 @@ export default function dcpExtension(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", async (event, ctx) => {
     const initiator = state.triggerState.pendingInitiator ?? "pi-native";
-    state.compactionPreview = createCompactionPreview(event, initiator);
-    return handleSessionBeforeCompact(event, ctx, state.config, state.protection);
+    const focusIsUserSupplied = state.triggerState.pendingFocusIsExplicit;
+    const preview = createCompactionPreview(event, initiator, focusIsUserSupplied);
+    state.compactionPreview = preview;
+    return handleSessionBeforeCompact(event, ctx, state.config, state.protection, preview);
   });
 }

@@ -6,5 +6,6 @@ export function createTriggerState(): TriggerState {
     turnsSinceCompaction: 0,
     tokensAtLastCompaction: null,
     pendingInitiator: null,
+    pendingFocusIsExplicit: false,
   };
 }

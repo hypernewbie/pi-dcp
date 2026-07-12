@@ -83,7 +83,8 @@
         "protectedFilePatterns": { "type": ["array", "null"], "items": { "type": "string" } },
         "protectUserMessages": { "type": "boolean", "default": false },
         "maxProtectedTokens": { "type": "integer", "minimum": 1000, "default": 24000 },
-        "preserveSubagentResults": { "type": "boolean", "default": true }
+        "preserveSubagentResults": { "type": "boolean", "default": true },
+        "showCompression": { "type": "boolean", "default": false }
       }
     }
   }

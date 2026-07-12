@@ -92,3 +92,12 @@ export function matchesAnyPattern(value: string, patterns: string[]): boolean {
 function matchesPattern(value: string, pattern: string): boolean {
   return minimatch(value, pattern, { dot: true, nocase: false });
 }
+
+/**
+ * Char/4 heuristic for plain text, matching Pi's own `estimateTokens()` text
+ * handling. Used for summary text, which is not an AgentMessage.
+ */
+export function estimateTextTokens(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}

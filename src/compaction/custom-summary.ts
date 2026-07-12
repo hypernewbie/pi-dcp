@@ -2,8 +2,9 @@ import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { DcpConfig, ResolvedProtection } from "../types.ts";
+import type { CompactionPreview, DcpConfig, ResolvedProtection } from "../types.ts";
 import { notify } from "../ui.ts";
+import { estimateTextTokens } from "../utils.ts";
 import { renderSummaryPrompt } from "./prompt.ts";
 import { buildProtectedAppendix } from "./protected-appendix.ts";
 
@@ -12,6 +13,7 @@ export async function handleSessionBeforeCompact(
   ctx: ExtensionContext,
   config: DcpConfig,
   protection: ResolvedProtection,
+  preview: CompactionPreview,
 ): Promise<{ compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown } } | undefined> {
   if (!config.enabled || !config.compaction.customSummary) return undefined;
 
@@ -91,6 +93,11 @@ export async function handleSessionBeforeCompact(
       return undefined;
     }
 
+    const prevRun = findPreviousDcpRunInfo(event);
+    const runNumber = prevRun.runNumber + 1;
+    const cumulativeRemovedTokens = prevRun.cumulativeRemovedTokens + preview.removedTokensThisRun;
+    const summaryTokensThisRun = estimateTextTokens(summary);
+
     return {
       compaction: {
         summary,
@@ -106,6 +113,13 @@ export async function handleSessionBeforeCompact(
           truncatedProtected: protectedResult.collection.truncatedCount,
           skippedProtected: protectedResult.collection.skippedCount,
           fromDcp: true,
+          runNumber,
+          cumulativeRemovedTokens,
+          removedTokensThisRun: preview.removedTokensThisRun,
+          summaryTokensThisRun,
+          messagesCompressed: preview.messagesCompressed,
+          toolsCompressed: preview.toolsCompressed,
+          focus: preview.focusIsUserSupplied ? preview.focus : undefined,
         },
       },
     };
@@ -114,6 +128,32 @@ export async function handleSessionBeforeCompact(
     notify(ctx, config, `DCP compaction summary failed: ${message}`, "error");
     return undefined;
   }
+}
+
+interface PreviousDcpRunInfo {
+  runNumber: number;
+  cumulativeRemovedTokens: number;
+}
+
+/**
+ * Find the most recent genuine DCP compression run's persisted counters, by
+ * scanning prior compaction/branch_summary entries for `details.fromDcp`.
+ * Returns zeros when this is the first DCP compression on this branch.
+ */
+function findPreviousDcpRunInfo(event: SessionBeforeCompactEvent): PreviousDcpRunInfo {
+  for (let i = event.branchEntries.length - 1; i >= 0; i--) {
+    const entry = event.branchEntries[i];
+    if (entry.type !== "compaction" && entry.type !== "branch_summary") continue;
+    const details = entry.details;
+    if (!details || typeof details !== "object") continue;
+    const value = details as { fromDcp?: unknown; runNumber?: unknown; cumulativeRemovedTokens?: unknown };
+    if (value.fromDcp !== true) continue;
+    const runNumber = typeof value.runNumber === "number" ? value.runNumber : 0;
+    const cumulativeRemovedTokens =
+      typeof value.cumulativeRemovedTokens === "number" ? value.cumulativeRemovedTokens : 0;
+    return { runNumber, cumulativeRemovedTokens };
+  }
+  return { runNumber: 0, cumulativeRemovedTokens: 0 };
 }
 
 function resolveModelBySpec(ctx: ExtensionContext, spec: string) {

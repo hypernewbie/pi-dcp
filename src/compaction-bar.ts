@@ -1,25 +1,39 @@
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type {
   ExtensionContext,
   SessionBeforeCompactEvent,
   SessionCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompactionInitiator, CompactionPreview, DcpConfig } from "./types.ts";
+import { estimateTextTokens } from "./utils.ts";
 
 const PRUNED = "░";
 const SPLIT_PREFIX = "⣿";
 const KEPT = "█";
 
-/** Capture the logical shape of the context immediately before compaction. */
+/**
+ * Capture the logical shape of the context immediately before compaction, plus
+ * OpenCode-DCP-faithful compression facts (removed tokens, message/tool counts).
+ * These facts are computed from `event.preparation` alone, so they are available
+ * for ANY compaction (DCP-triggered or Pi-native) — they describe what Pi is
+ * about to discard, independent of who ultimately writes the summary.
+ */
 export function createCompactionPreview(
   event: SessionBeforeCompactEvent,
   initiator: CompactionInitiator,
+  focusIsUserSupplied: boolean,
 ): CompactionPreview {
-  const { preparation, branchEntries } = event;
+  const { preparation, branchEntries, customInstructions } = event;
   const firstKeptIndex = branchEntries.findIndex((entry) => entry.id === preparation.firstKeptEntryId);
 
   const summarized = preparation.messagesToSummarize.length;
   const splitPrefix = preparation.turnPrefixMessages.length;
   const kept = firstKeptIndex >= 0 ? countContextEntries(branchEntries.slice(firstKeptIndex)) : 0;
+
+  const removedMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+  const removedTokensThisRun = removedMessages.reduce((sum, m) => sum + estimateTokens(m), 0);
+  const { messagesCompressed, toolsCompressed } = countMessagesAndTools(removedMessages);
 
   return {
     summarized,
@@ -28,7 +42,29 @@ export function createCompactionPreview(
     tokensBefore: preparation.tokensBefore,
     reason: event.reason,
     initiator,
+    removedTokensThisRun,
+    messagesCompressed,
+    toolsCompressed,
+    focus: customInstructions,
+    focusIsUserSupplied,
   };
+}
+
+/** Count conversational turns (user/assistant) vs. tool calls within them. */
+function countMessagesAndTools(messages: AgentMessage[]): { messagesCompressed: number; toolsCompressed: number } {
+  let messagesCompressed = 0;
+  let toolsCompressed = 0;
+  for (const message of messages) {
+    if (message.role === "user" || message.role === "assistant") {
+      messagesCompressed++;
+    }
+    if (message.role === "assistant") {
+      for (const block of message.content) {
+        if (block.type === "toolCall") toolsCompressed++;
+      }
+    }
+  }
+  return { messagesCompressed, toolsCompressed };
 }
 
 function getInitiatorLabel(initiator: CompactionInitiator): string {
@@ -50,8 +86,9 @@ function getSummaryProviderLabel(fromExtension: boolean): string {
  *
  *   │░░░░░░░░⣿⣿████████████████████████│
  *
- * ░ = summarized history, ⣿ = split-turn prefix summarized separately,
- * █ = retained recent context.
+ * ░ = compressed this run (main history), ⣿ = split-turn prefix compressed
+ * this run (a genuine Pi concept: the compaction landed mid-turn, so the
+ * unfinished turn's prefix is summarized separately from the rest), █ = kept.
  */
 export function renderCompactionBar(preview: CompactionPreview, width = 50): string {
   const parts = [
@@ -75,57 +112,87 @@ export function renderCompactionBar(preview: CompactionPreview, width = 50): str
   return `│${bar}│`;
 }
 
-export interface CompactionReceipt {
-  fileRefs?: number;
-  protectedBlocks?: number;
-  subagentArtifacts?: number;
+export interface DcpRunInfo {
+  runNumber: number;
+  cumulativeRemovedTokens: number;
 }
 
 export function formatCompactionNotification(
   preview: CompactionPreview,
   event: SessionCompactEvent,
-  receipt?: CompactionReceipt,
+  dcpRun: DcpRunInfo | undefined,
+  showCompression: boolean,
 ): string {
   const bar = renderCompactionBar(preview);
   const initiatorLabel = getInitiatorLabel(preview.initiator);
   const reasonLabel = getReasonLabel(preview.initiator, event.reason);
   const providerLabel = getSummaryProviderLabel(event.fromExtension);
-  const tokens = `~${formatTokens(preview.tokensBefore)}`;
 
-  const lines = [
-    `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel} (${tokens})`,
-    ``,
-    `${bar}`,
-    `${PRUNED} summarized: ${preview.summarized}  ${SPLIT_PREFIX} split prefix: ${preview.splitPrefix}  ${KEPT} kept: ${preview.kept}`,
-  ];
+  const summaryTokensThisRun = estimateTextTokens(event.compactionEntry.summary);
+  const removedStr = formatTokens(preview.removedTokensThisRun);
+  const summaryStr = formatTokens(summaryTokensThisRun);
 
-  lines.push("", formatReceipt(receipt, event.fromExtension));
+  const lines: string[] = [];
+
+  if (dcpRun) {
+    // Genuine DCP compression run: OpenCode-faithful cumulative header + per-run line.
+    const cumulativeRemovedStr = formatTokens(dcpRun.cumulativeRemovedTokens);
+    lines.push(`▣ DCP | -~${cumulativeRemovedStr} removed, +~${summaryStr} summary`);
+    lines.push("");
+    lines.push(bar);
+    lines.push(`▣ Compression #${dcpRun.runNumber} -~${removedStr} removed, +~${summaryStr} summary`);
+    lines.push(
+      `→ Items: ${preview.messagesCompressed} message${preview.messagesCompressed === 1 ? "" : "s"} and ${preview.toolsCompressed} tool call${preview.toolsCompressed === 1 ? "" : "s"} compressed`,
+    );
+    const originLabel = preview.initiator === "dcp-command" ? "command" : "dual-threshold";
+    let originLine = `→ Origin: ${originLabel}`;
+    if (preview.focusIsUserSupplied && preview.focus) {
+      originLine += `, focus: "${truncateInline(preview.focus, 80)}"`;
+    }
+    lines.push(originLine);
+    if (preview.splitPrefix > 0) {
+      lines.push(`→ Split-turn prefix: ${preview.splitPrefix} message${preview.splitPrefix === 1 ? "" : "s"}, summarized separately`);
+    }
+    if (showCompression) {
+      lines.push(`→ Compression (~${summaryStr}): ${event.compactionEntry.summary}`);
+    }
+  } else {
+    // Not a genuine DCP compression run (Pi-native, or DCP requested but Pi's
+    // default summary was used after a fallback). Show the same universal
+    // facts, but do not claim a DCP-run identity or cumulative totals DCP
+    // never tracked.
+    lines.push(`▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel}`);
+    lines.push("");
+    lines.push(bar);
+    lines.push(`→ Removed: ~${removedStr}, Summary: ~${summaryStr}`);
+    lines.push(
+      `→ Items: ${preview.messagesCompressed} message${preview.messagesCompressed === 1 ? "" : "s"} and ${preview.toolsCompressed} tool call${preview.toolsCompressed === 1 ? "" : "s"} compacted`,
+    );
+    if (preview.splitPrefix > 0) {
+      lines.push(`→ Split-turn prefix: ${preview.splitPrefix} message${preview.splitPrefix === 1 ? "" : "s"}, summarized separately`);
+    }
+  }
 
   return lines.join("\n");
 }
 
 export function formatMinimalNotification(
-  initiator: CompactionInitiator,
-  hostReason: "manual" | "threshold" | "overflow",
-  fromExtension: boolean,
-  tokensBefore?: number,
+  preview: CompactionPreview,
+  event: SessionCompactEvent,
+  dcpRun: DcpRunInfo | undefined,
 ): string {
-  const initiatorLabel = getInitiatorLabel(initiator);
-  const reasonLabel = getReasonLabel(initiator, hostReason);
-  const providerLabel = getSummaryProviderLabel(fromExtension);
-  const tokens = tokensBefore != null ? ` (~${formatTokens(tokensBefore)})` : "";
-  return `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel}${tokens}`;
-}
+  const initiatorLabel = getInitiatorLabel(preview.initiator);
+  const reasonLabel = getReasonLabel(preview.initiator, event.reason);
+  const providerLabel = getSummaryProviderLabel(event.fromExtension);
 
-function formatReceipt(receipt: CompactionReceipt | undefined, fromExtension: boolean): string {
-  if (!fromExtension) {
-    return "receipt: Pi default summary — DCP carry-forward details unavailable";
+  if (dcpRun) {
+    const summaryTokensThisRun = estimateTextTokens(event.compactionEntry.summary);
+    const cumulativeRemovedStr = formatTokens(dcpRun.cumulativeRemovedTokens);
+    const summaryStr = formatTokens(summaryTokensThisRun);
+    return `▣ DCP | -~${cumulativeRemovedStr} removed, +~${summaryStr} summary — Compression #${dcpRun.runNumber}`;
   }
 
-  const fileRefs = receipt?.fileRefs ?? 0;
-  const protectedBlocks = receipt?.protectedBlocks ?? 0;
-  const subagentArtifacts = receipt?.subagentArtifacts ?? 0;
-  return `receipt: ${fileRefs} file refs · ${protectedBlocks} protected · ${subagentArtifacts} subagent artifact${subagentArtifacts === 1 ? "" : "s"}`;
+  return `▣ ${initiatorLabel} · ${reasonLabel} · ${providerLabel}`;
 }
 
 export function notifyCompaction(
@@ -133,39 +200,25 @@ export function notifyCompaction(
   preview: CompactionPreview | undefined,
   event: SessionCompactEvent,
   config: DcpConfig,
-  receipt?: CompactionReceipt,
+  dcpRun: DcpRunInfo | undefined,
 ): void {
   if (config.notification === "off") return;
   if (!ctx.hasUI) return;
 
-  const tokensBefore = preview?.tokensBefore ?? event.compactionEntry?.tokensBefore;
-
   if (!preview) {
-    // Fallback: still emit a truthful one-line result.
-    const fallbackInitiator: CompactionInitiator = "pi-native";
-    const minimal = formatMinimalNotification(
-      fallbackInitiator,
-      event.reason,
-      event.fromExtension,
-      tokensBefore,
-    );
-    ctx.ui.notify(minimal, "info");
+    // Fallback: no captured preview (should not normally happen), emit a
+    // truthful minimal line using only what SessionCompactEvent guarantees.
+    const label = event.fromExtension ? "DCP summary" : "Pi default summary";
+    ctx.ui.notify(`▣ PI COMPACT · ${event.reason} · ${label}`, "info");
     return;
   }
 
   if (config.notification === "minimal") {
-    const minimal = formatMinimalNotification(
-      preview.initiator,
-      event.reason,
-      event.fromExtension,
-      preview.tokensBefore,
-    );
-    ctx.ui.notify(minimal, "info");
+    ctx.ui.notify(formatMinimalNotification(preview, event, dcpRun), "info");
     return;
   }
 
-  // detailed
-  ctx.ui.notify(formatCompactionNotification(preview, event, receipt), "info");
+  ctx.ui.notify(formatCompactionNotification(preview, event, dcpRun, config.compaction.showCompression), "info");
 }
 
 function countContextEntries(entries: Array<{ type: string }>): number {
@@ -196,6 +249,12 @@ function allocateWidths(counts: number[], width: number, total: number): number[
 
 function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
   return `${tokens}`;
+}
+
+function truncateInline(s: string, maxLen: number): string {
+  const oneLine = s.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLen) return oneLine;
+  return oneLine.slice(0, maxLen - 1) + "…";
 }

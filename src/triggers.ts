@@ -44,9 +44,11 @@ export function triggerCompaction(
 ): void {
   if (state.isCompacting) return;
 
+  const focusIsUserSupplied = typeof customInstructions === "string" && customInstructions.trim().length > 0;
   const focus = customInstructions ?? config.triggers.endOfTurn.focus;
   state.isCompacting = true;
   state.pendingInitiator = initiator;
+  state.pendingFocusIsExplicit = focusIsUserSupplied;
 
   debug(ctx, config, `Triggering compaction (initiator: ${initiator}, focus: ${focus.slice(0, 60)}...)`);
 
@@ -78,6 +80,7 @@ export function resetTriggerState(state: TriggerState): void {
   state.turnsSinceCompaction = 0;
   state.tokensAtLastCompaction = null;
   state.pendingInitiator = null;
+  state.pendingFocusIsExplicit = false;
   state.lastCompaction = undefined;
 }
 

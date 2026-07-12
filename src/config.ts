@@ -63,6 +63,7 @@ export const DEFAULT_CONFIG: DcpConfig = {
     protectUserMessages: false,
     maxProtectedTokens: 24_000,
     preserveSubagentResults: true,
+    showCompression: false,
   },
 
   // Pi-native equivalents of DCP's protected write/edit tools.
@@ -237,6 +238,12 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
       )}.`,
     );
     merged.compaction.preserveSubagentResults = DEFAULT_CONFIG.compaction.preserveSubagentResults;
+  }
+  if (typeof merged.compaction.showCompression !== "boolean") {
+    warnings.push(
+      `Invalid compaction.showCompression; using ${String(DEFAULT_CONFIG.compaction.showCompression)}.`,
+    );
+    merged.compaction.showCompression = DEFAULT_CONFIG.compaction.showCompression;
   }
   merged.pruning.turnProtection.turns = normalizeInteger(
     merged.pruning.turnProtection.turns,

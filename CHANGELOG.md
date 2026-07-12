@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.0
+
+- **Corrected the compaction receipt to be faithful to OpenCode DCP.** The `0.3.x` "carried forward: N file refs · N protected · N subagent artifacts" receipt was not based on OpenCode DCP's actual notification and is replaced.
+- New receipt shape, ported from OpenCode DCP's `lib/ui/notification.ts` (`sendCompressNotification`/`formatStatsHeader`):
+  - cumulative header: `▣ DCP | -~<cumulative removed> removed, +~<summary tokens> summary`
+  - per-run line: `▣ Compression #<N> -~<removed this run> removed, +~<summary tokens> summary`
+  - `→ Items: <N> messages and <M> tool calls compressed`
+  - minimal mode: `▣ DCP | -~<cumulative> removed, +~<summary> summary — Compression #<N>`
+  - only rendered for a genuine DCP compression run (`fromExtension: true` and pi-dcp's own persisted run counters present); a DCP-initiated compaction that fell back to Pi's default summary is shown honestly without a fake run identity.
+- **Pi-only additions, clearly not from OpenCode**: `→ Origin: command|dual-threshold[, focus: "..."]` (focus only shown when explicitly user-supplied, never the default dual-threshold boilerplate), and `→ Split-turn prefix: N messages, summarized separately` (a genuine Pi concept OpenCode has no equivalent for).
+- **Deliberately not ported**: `→ Topic:`. OpenCode derives this from the model's own `compress` tool call; Pi has no equivalent, and a user focus string is not a model-generated topic.
+- Added `compaction.showCompression` (default `false`, matches OpenCode's `compress.showCompression`): gates whether the actual committed summary text appears in the notification.
+- Removed tokens/summary tokens/message and tool-call counts are computed from `event.preparation` using Pi's own `estimateTokens()`, and are available for both DCP-triggered and Pi-native compactions (they describe what Pi is discarding, independent of who wrote the summary).
+- `runNumber` and cumulative removed tokens are persisted in the DCP compaction entry's `details`, read back from prior compaction/branch-summary entries on each subsequent run — same append-only pattern already used for `readFiles`/`modifiedFiles`.
+- `/dcp status` last-compaction line now reports the same removed/summary/items/run-number facts instead of the incorrect 0.3.x receipt fields.
+
 ## 0.3.0
 
 - **Truthful compaction notifications**: compaction bar now shows provenance — `DCP COMPRESS · command/dual-threshold · DCP summary` vs `PI COMPACT · manual/threshold/overflow · Pi default summary`. Supports `off`/`minimal`/`detailed` modes and fallback when preview is unavailable.
