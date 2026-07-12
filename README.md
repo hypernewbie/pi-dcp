@@ -50,7 +50,8 @@ Example:
       "tokenThresholdPercent": 73,
       "tokenThresholdAbsolute": 450000,
       "cooldownTurns": 2,
-      "focus": "Preserve architecture decisions, file changes, and current task. Drop verbose logs and repeated outputs."
+      "focus": "Preserve architecture decisions, file changes, and current task. Drop verbose logs and repeated outputs.",
+      "autoContinue": true
     }
   },
   "compaction": {
@@ -102,7 +103,7 @@ This adapts automatically across windows with **zero per-model config**:
 
 A big window is a *ceiling, not a target* — the absolute cap prevents filling a 1M window (≈ $10/turn) just because the model allows it. Either threshold can be set to `null` to disable it; both `null` defers entirely to Pi's built-in compaction.
 
-The check runs once the agent has **fully settled** (the whole reply, including any multi-step tool-call loop, has finished and Pi guarantees nothing will auto-continue) — never mid-task. Pi's `ctx.compact()` always aborts whatever is currently running before it compacts, so pi-dcp deliberately does not check the threshold while the agent is still actively working; it waits for the same safe point Pi's own built-in threshold/overflow auto-compaction uses.
+The check runs on every turn (`turn_end`), including mid-task inside a long multi-step tool-call loop — not just once a task fully finishes. That's deliberate: on a large context window, waiting until the whole task settles could mean burning far past the absolute cost cap before pi-dcp ever gets a look-in. The tradeoff is that Pi's `ctx.compact()` always aborts whatever the agent is currently doing before it compacts (Pi has no safe mid-loop compact-and-continue primitive) — so a threshold crossed mid-task can cut a running tool-call loop short. `triggers.endOfTurn.autoContinue` (default `true`, **a Pi-only addition not present in upstream OpenCode DCP**) detects that case and automatically re-prompts to resume the interrupted task once compaction finishes, instead of leaving the run dead. Set it to `false` to compact-and-stop instead (you resume manually).
 
 ## Compaction notifications
 
@@ -121,7 +122,7 @@ When `notification: "detailed"` (the default) and pi-dcp itself performed the co
 
 `-X removed` / `+Y summary` are estimated with Pi's own token estimator (same char/4 heuristic Pi uses internally), not billed/exact tokens. `Compression #N` and the cumulative removed total are pi-dcp's own persisted counters — they only increment when pi-dcp's own summarizer actually produced the committed summary (`fromExtension: true`). `→ Origin` and any focus text are only shown for a real DCP-initiated run, and the default dual-threshold focus text is never shown as a fake "topic" — only an explicit `/dcp compress <focus>` argument is.
 
-When the compaction was Pi-native (native `/compact`, threshold, or overflow), or DCP asked for it but its summarizer fell back to Pi's own default summary, the notification never claims a `Compression #N` identity or cumulative totals DCP didn't produce:
+When the compaction was Pi-native (native `/compact`, threshold, or overflow), pi-dcp's custom summarizer never runs at all — Pi's own default summary is left completely untouched, and the notification never claims a `Compression #N` identity or cumulative totals DCP didn't produce. (The same honest fallback labeling also applies on the rare occasion DCP asked for a compression but its own summarizer failed and Pi's default summary was used instead.)
 
 ```text
 ▣ PI COMPACT · threshold · Pi default summary

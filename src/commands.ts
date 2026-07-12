@@ -18,7 +18,7 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
       switch (lc) {
         case "compact":
         case "compress":
-          return handleCompact(ctx, state, restArgs);
+          return handleCompact(pi, ctx, state, restArgs);
         case "enable":
           return handleEnable(ctx, state);
         case "disable":
@@ -40,13 +40,13 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
   });
 }
 
-async function handleCompact(ctx: ExtensionCommandContext, state: RuntimeState, args: string): Promise<void> {
+async function handleCompact(pi: ExtensionAPI, ctx: ExtensionCommandContext, state: RuntimeState, args: string): Promise<void> {
   if (!state.config.enabled) {
     notify(ctx, state.config, "pi-dcp is disabled", "warning");
     return;
   }
   const focus = args.trim() || undefined;
-  triggerCompaction(ctx, state.config, state.triggerState, focus, "dcp-command");
+  triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command");
 }
 
 async function handleEnable(ctx: ExtensionCommandContext, state: RuntimeState): Promise<void> {

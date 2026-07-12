@@ -67,7 +67,8 @@
             "tokenThresholdPercent": { "type": ["number", "null"], "minimum": 0, "maximum": 100, "default": 73 },
             "tokenThresholdAbsolute": { "type": ["number", "null"], "minimum": 0, "default": 450000 },
             "cooldownTurns": { "type": "integer", "minimum": 0, "default": 2 },
-            "focus": { "type": "string" }
+            "focus": { "type": "string" },
+            "autoContinue": { "type": "boolean", "default": true }
           }
         }
       }

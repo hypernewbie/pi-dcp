@@ -91,18 +91,16 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // Check the dual threshold on agent_settled, NOT turn_end. Pi's "turn_end" fires
-  // after every individual assistant message + tool-result step within a single
-  // multi-step agentic run (turnIndex increments per step, well before the visible
-  // task finishes). ctx.compact() unconditionally aborts the current agent operation
-  // first (Pi's own compact() is designed as a standalone/manual action, not a
-  // mid-loop continuation point) - calling it from turn_end killed in-flight runs
-  // partway through a tool-call loop. "agent_settled" only fires once the whole run
-  // has fully finished and Pi guarantees no automatic retry/compaction/continuation
-  // will follow, which is the same point Pi's own native threshold/overflow
-  // auto-compaction checks itself (after agent_end, before the next prompt) - so this
-  // matches Pi's own compaction timing instead of racing its agent loop.
-  pi.on("agent_settled", (_event, ctx) => {
+  // Checked on turn_end (fires after every individual assistant message + tool-result
+  // step, not just once the whole run settles) so the token cap actually matters for a
+  // long multi-step run on a small/mid context window - by the time an "agent_settled"
+  // style check would run, a big autonomous task may have already blown past the
+  // absolute cost cap this trigger exists for. ctx.compact() unconditionally aborts
+  // whatever the agent is doing first, so firing here can interrupt an in-flight
+  // tool-call loop; triggerCompaction() detects that and re-prompts to resume the
+  // task afterward (triggers.endOfTurn.autoContinue, default true) instead of leaving
+  // the run dead.
+  pi.on("turn_end", (_event, ctx) => {
     if (!state.config.enabled || !state.config.triggers.endOfTurn.enabled) return;
 
     const usage = ctx.getContextUsage();
@@ -111,7 +109,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     state.triggerState.turnsSinceCompaction++;
 
     if (shouldTriggerCompaction(state.config, state.triggerState, usage.tokens, usage.contextWindow)) {
-      triggerCompaction(ctx, state.config, state.triggerState, undefined, "dcp-dual-threshold");
+      triggerCompaction(pi, ctx, state.config, state.triggerState, undefined, "dcp-dual-threshold");
     }
   });
 
@@ -274,6 +272,15 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const focusIsUserSupplied = state.triggerState.pendingFocusIsExplicit;
     const preview = createCompactionPreview(event, initiator, focusIsUserSupplied);
     state.compactionPreview = preview;
+
+    // Only substitute DCP's own custom summary when pi-dcp itself asked for this
+    // compaction (via /dcp compact or the dual-threshold trigger). A plain native
+    // /compact, or Pi's own threshold/overflow auto-compaction, gets Pi's own
+    // default summary untouched - pi-dcp still reports it honestly (as
+    // "PI COMPACT", never a fake DCP run identity) without hijacking what the
+    // user or Pi itself asked for.
+    if (initiator === "pi-native") return undefined;
+
     return handleSessionBeforeCompact(event, ctx, state.config, state.protection, preview);
   });
 }

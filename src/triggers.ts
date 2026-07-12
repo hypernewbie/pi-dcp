@@ -1,7 +1,15 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CompactionInitiator, DcpConfig, TriggerState } from "./types.ts";
 import { resolveEffectiveThreshold } from "./config.ts";
 import { notify, debug } from "./ui.ts";
+
+// Pi-only addition (not in upstream OpenCode DCP): ctx.compact() always aborts
+// whatever the agent is currently doing before it compacts. If the dual-threshold
+// trigger fires while a multi-step tool-call run is still active, this nudge is
+// re-sent after compaction completes so the interrupted task keeps going instead
+// of stopping cold. Gated by triggers.endOfTurn.autoContinue (default true).
+const AUTO_CONTINUE_PROMPT =
+  "Continue the task you were working on. It was automatically paused by pi-dcp to compact the growing context - nothing else has changed.";
 
 export function shouldTriggerCompaction(
   config: DcpConfig,
@@ -36,6 +44,7 @@ export function shouldTriggerCompaction(
 }
 
 export function triggerCompaction(
+  pi: ExtensionAPI,
   ctx: ExtensionContext,
   config: DcpConfig,
   state: TriggerState,
@@ -50,6 +59,10 @@ export function triggerCompaction(
   state.pendingInitiator = initiator;
   state.pendingFocusIsExplicit = focusIsUserSupplied;
 
+  // Snapshot now: ctx.compact() is about to abort whatever is running. If the
+  // agent was actively mid-run, remember it so we can resume it afterward.
+  const wasActive = !ctx.isIdle();
+
   debug(ctx, config, `Triggering compaction (initiator: ${initiator}, focus: ${focus.slice(0, 60)}...)`);
 
   ctx.compact({
@@ -59,6 +72,10 @@ export function triggerCompaction(
       state.isCompacting = false;
       state.turnsSinceCompaction = 0;
       state.pendingInitiator = null;
+
+      if (config.triggers.endOfTurn.autoContinue && wasActive && !ctx.hasPendingMessages()) {
+        pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
+      }
     },
     onError: (error) => {
       state.isCompacting = false;

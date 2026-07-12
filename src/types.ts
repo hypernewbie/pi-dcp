@@ -38,6 +38,15 @@ export interface EndOfTurnTriggerConfig {
   tokenThresholdAbsolute: number | null;
   cooldownTurns: number;
   focus: string;
+  /**
+   * Pi-only addition, not in upstream OpenCode DCP. ctx.compact() always aborts
+   * whatever the agent is currently doing before it compacts (Pi has no safe
+   * mid-loop compact-and-continue primitive) - so a dual-threshold trigger fired
+   * while a multi-step tool-call run is still in flight will cut it short. When
+   * true, pi-dcp detects that case and automatically re-prompts to resume the
+   * interrupted task once compaction finishes, instead of leaving the run dead.
+   */
+  autoContinue: boolean;
 }
 
 export interface TriggersConfig {

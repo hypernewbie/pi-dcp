@@ -49,7 +49,7 @@ describe("extension entry point", () => {
 
     const hookEvents = Object.keys(hooks).sort();
     expect(hookEvents).toContain("session_start");
-    expect(hookEvents).toContain("agent_settled");
+    expect(hookEvents).toContain("turn_end");
     expect(hookEvents).toContain("session_compact");
     expect(hookEvents).toContain("context");
     expect(hookEvents).toContain("session_before_compact");
@@ -152,5 +152,84 @@ describe("extension entry point", () => {
     expect(component).toBeDefined();
     const rendered = component.render(80).join("\n");
     expect(rendered).toContain("▣");
+  });
+
+  it("does not hijack a plain native /compact (or Pi's own threshold/overflow auto-compact) with DCP's custom summary", async () => {
+    // Regression test for a real bug: session_before_compact fires for every
+    // compaction reason (manual /compact, Pi's own threshold/overflow, AND
+    // pi-dcp's own /dcp compact or dual-threshold trigger) - there is only one
+    // hook, shared by all of them. DCP must only substitute its own custom
+    // summary when it genuinely asked for the compaction itself; a plain native
+    // /compact (or Pi's own auto-compaction) must be left completely untouched.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 125006, contextWindow: 200000 }),
+      sessionManager: { getBranch: () => [] },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: () => {},
+      // No model available: if handleSessionBeforeCompact runs, it must notify
+      // "No model available..." and fall back - that notification is the signal
+      // we use below to detect whether the custom-summary path was reached at all.
+      model: undefined,
+    };
+
+    for (const h of hooks["session_start"] ?? []) {
+      await h({ type: "session_start", reason: "new" }, ctx);
+    }
+
+    const message = (role: string, text: string) => ({
+      role,
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+
+    const makeBeforeEvent = (reason: string): any => ({
+      type: "session_before_compact",
+      preparation: {
+        messagesToSummarize: [message("user", "u1"), message("assistant", "a1")],
+        turnPrefixMessages: [],
+        tokensBefore: 125006,
+        firstKeptEntryId: "keep-1",
+        previousSummary: undefined,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      branchEntries: [],
+      customInstructions: undefined,
+      reason,
+      willRetry: false,
+      signal: new AbortController().signal,
+    });
+
+    // Case 1: plain native /compact (or Pi's own threshold auto-compact) - no
+    // pendingInitiator was ever set, so this resolves to "pi-native". Must be
+    // left completely alone: handleSessionBeforeCompact must never run.
+    for (const h of hooks["session_before_compact"] ?? []) {
+      await h(makeBeforeEvent("threshold"), ctx);
+    }
+    expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(false);
+
+    // Case 2: a genuine /dcp compact command run - pendingInitiator is set to
+    // "dcp-command" by triggerCompaction() before ctx.compact() fires. DCP must
+    // actually attempt its own custom summary here (and fall back honestly,
+    // since there's no model in this test).
+    const dcpCommand = commands.find((c) => c.name === "dcp")!;
+    await dcpCommand.handler!("compact", ctx);
+    for (const h of hooks["session_before_compact"] ?? []) {
+      await h(makeBeforeEvent("manual"), ctx);
+    }
+    expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(true);
   });
 });
