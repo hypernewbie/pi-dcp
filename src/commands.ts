@@ -23,11 +23,13 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
         case "config":
           return handleConfig(ctx, state);
         case "status":
-        case "":
           return showStatus(ctx, state);
+        case "help":
+        case "":
+          return showHelp(ctx, state);
         default:
           notify(ctx, state.config, `Unknown /dcp subcommand: ${subcommand}`, "warning");
-          return showStatus(ctx, state);
+          return showHelp(ctx, state);
       }
     },
   });
@@ -73,7 +75,26 @@ async function handleConfig(ctx: ExtensionCommandContext, state: RuntimeState): 
   }
 }
 
+async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Promise<void> {
+  const text = [
+    "pi-dcp commands:",
+    "  /dcp                 Show this help and current status",
+    "  /dcp status          Show current context/threshold status",
+    "  /dcp compact [focus] Compact now; optional focus guides the summary",
+    "  /dcp enable          Enable pi-dcp for this session",
+    "  /dcp disable         Disable pi-dcp for this session",
+    "  /dcp config          Show config paths and load warnings",
+    "",
+    ...statusLines(ctx, state),
+  ].join("\n");
+  display(ctx, text);
+}
+
 async function showStatus(ctx: ExtensionCommandContext, state: RuntimeState): Promise<void> {
+  display(ctx, statusLines(ctx, state).join("\n"));
+}
+
+function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[] {
   const usage = ctx.getContextUsage();
   const endOfTurnThreshold = usage
     ? resolveThreshold(state.config.triggers.endOfTurn.tokenThreshold, usage.contextWindow)
@@ -82,7 +103,7 @@ async function showStatus(ctx: ExtensionCommandContext, state: RuntimeState): Pr
     ? resolveThreshold(state.config.triggers.nudge.tokenThreshold, usage.contextWindow)
     : null;
 
-  const lines = [
+  return [
     `pi-dcp: ${state.config.enabled ? "enabled" : "disabled"}`,
     `context: ${usage?.tokens?.toLocaleString() ?? "unknown"} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens`,
     `end-of-turn threshold: ${endOfTurnThreshold?.toLocaleString() ?? "unknown"}`,
@@ -91,12 +112,12 @@ async function showStatus(ctx: ExtensionCommandContext, state: RuntimeState): Pr
     `custom summary: ${state.config.compaction.customSummary ? "on" : "off"}`,
     `context pruning: ${state.config.pruning.enabled ? "on (experimental)" : "off"}`,
   ];
+}
 
-  const text = lines.join("\n");
+function display(ctx: ExtensionCommandContext, text: string): void {
   if (ctx.hasUI) {
     ctx.ui.notify(text, "info");
   } else {
     console.log(text);
   }
-
 }
