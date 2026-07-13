@@ -82,6 +82,7 @@ Example:
 | `/dcp stats` | Show compaction/pruning stats (current branch) |
 | `/dcp compact [focus]` / `/dcp compress [focus]` | Trigger compaction now with optional focus text |
 | `/dcp compact_continue [focus]` / `/dcp compress_continue [focus]` | Same, but always resumes the interrupted task afterward (`ctx.compact()` aborts current work first) — regardless of `triggers.endOfTurn.autoContinue` |
+| `/dcp threshold <percent\|null> <absolute\|null>` | Set the dual-threshold for this session only (in-memory, not written to `dcp.json`) |
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
 

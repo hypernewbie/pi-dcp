@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.7
+
+- **Added `/dcp threshold <percent|null> <absolute|null>`**: sets the dual-threshold (`triggers.endOfTurn.tokenThresholdPercent`/`tokenThresholdAbsolute`) for the current session only — mutates the in-memory config the same way `/dcp enable`/`/dcp disable` already do, never touches `dcp.json`. Either value can be `null` (or `off`/`none`/`-`) to disable that side. Confirms and echoes the new effective threshold on success.
+
 ## 0.4.6
 
 - **Added `/dcp compact_continue` and `/dcp compress_continue`** (aliases of each other, same `[focus]` argument as `/dcp compact`/`/dcp compress`): compact now, then always resume the interrupted task afterward, regardless of `triggers.endOfTurn.autoContinue`.

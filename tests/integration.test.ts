@@ -232,4 +232,53 @@ describe("extension entry point", () => {
     }
     expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(true);
   });
+
+  it("/dcp threshold sets the dual-threshold for this session only, without touching config files", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 100_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => [] },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: () => {},
+      model: undefined,
+    };
+
+    for (const h of hooks["session_start"] ?? []) {
+      await h({ type: "session_start", reason: "new" }, ctx);
+    }
+
+    const dcpCommand = commands.find((c) => c.name === "dcp")!;
+
+    // Valid: sets both percent and absolute.
+    await dcpCommand.handler!("threshold 60 300000", ctx);
+    expect(notifiedMessages.some((m) => m.includes("60%") && m.includes("300,000"))).toBe(true);
+
+    // Valid: "null" disables one side.
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("threshold null 500000", ctx);
+    expect(notifiedMessages.some((m) => m.includes("—") && m.includes("500,000"))).toBe(true);
+
+    // Invalid: out-of-range percent is rejected, does not change state.
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("threshold 150 300000", ctx);
+    expect(notifiedMessages.some((m) => m.toLowerCase().includes("invalid percent"))).toBe(true);
+
+    // Missing argument is rejected with a usage message.
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("threshold 60", ctx);
+    expect(notifiedMessages.some((m) => m.toLowerCase().includes("usage"))).toBe(true);
+  });
 });

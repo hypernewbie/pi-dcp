@@ -22,6 +22,8 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
         case "compact_continue":
         case "compress_continue":
           return handleCompact(pi, ctx, state, restArgs, true);
+        case "threshold":
+          return handleThreshold(ctx, state, restArgs);
         case "enable":
           return handleEnable(ctx, state);
         case "disable":
@@ -56,6 +58,52 @@ async function handleCompact(
   }
   const focus = args.trim() || undefined;
   triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command", { forceContinue });
+}
+
+async function handleThreshold(ctx: ExtensionCommandContext, state: RuntimeState, args: string): Promise<void> {
+  const parts = args.trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 2) {
+    notify(
+      ctx,
+      state.config,
+      "Usage: /dcp threshold <percent|null> <absolute|null> (this session only, not saved to config)",
+      "warning",
+    );
+    return;
+  }
+
+  const [percentArg, absoluteArg] = parts;
+  const percent = parseThresholdValue(percentArg);
+  const absolute = parseThresholdValue(absoluteArg);
+
+  if (percent === undefined || (percent !== null && (percent < 0 || percent > 100))) {
+    notify(ctx, state.config, `Invalid percent "${percentArg}": must be 0-100 or "null"`, "warning");
+    return;
+  }
+  if (absolute === undefined || (absolute !== null && (!Number.isInteger(absolute) || absolute < 0))) {
+    notify(ctx, state.config, `Invalid absolute "${absoluteArg}": must be a non-negative integer or "null"`, "warning");
+    return;
+  }
+
+  state.config.triggers.endOfTurn.tokenThresholdPercent = percent;
+  state.config.triggers.endOfTurn.tokenThresholdAbsolute = absolute;
+
+  const usage = ctx.getContextUsage();
+  const effective = resolveEffectiveThreshold(percent, absolute, usage?.contextWindow ?? 0);
+  notify(
+    ctx,
+    state.config,
+    `pi-dcp thresholds set for this session: ${percent !== null ? `${percent}%` : "—"} / ${absolute !== null ? absolute.toLocaleString() : "—"} → effective ${effective !== null ? effective.toLocaleString() : "none (defer to Pi)"}`,
+    "info",
+  );
+}
+
+function parseThresholdValue(raw: string): number | null | undefined {
+  const lc = raw.toLowerCase();
+  if (lc === "null" || lc === "off" || lc === "none" || lc === "-") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  return n;
 }
 
 async function handleEnable(ctx: ExtensionCommandContext, state: RuntimeState): Promise<void> {
@@ -97,6 +145,7 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
     "  /dcp stats           Show compaction/pruning stats (current branch)",
     "  /dcp compact|compress [focus] Compact now; optional focus guides the summary",
     "  /dcp compact_continue|compress_continue [focus] Compact now, then resume the interrupted task afterward",
+    "  /dcp threshold <percent|null> <absolute|null> Set dual-threshold for this session only (not saved)",
     "  /dcp enable          Enable pi-dcp for this session",
     "  /dcp disable         Disable pi-dcp for this session",
     "  /dcp config          Show config paths and load warnings",
