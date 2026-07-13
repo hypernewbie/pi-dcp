@@ -73,6 +73,8 @@ Example:
 }
 ```
 
+`compaction.summaryModel` (default `null` → use the session's current model) lets you point DCP's own summarizer at a *different* model/provider (`"provider/model-id"`, e.g. `"deepseek/deepseek-v4-pro"`). Useful if your active model can't reliably complete a standalone, non-conversational request (some provider/account setups issue session-scoped model IDs that only work as part of an ongoing conversation thread, and reject a fresh, isolated completion call outright). If DCP's own summarizer fails for any reason, the real provider error is reported honestly instead of silently falling back — but pi-dcp cannot fix a model/provider that also can't complete Pi's own native fallback summary; `summaryModel` is the way to route around it.
+
 ## Commands
 
 | Command | Description |

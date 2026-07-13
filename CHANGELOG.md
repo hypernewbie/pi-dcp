@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.8
+
+- **Fixed: a genuine provider error during DCP's own custom summarization was silently mislabeled as "summary was empty, falling back to default".** `completeSimple()` does not throw for provider-level failures (auth, rate limits, "model not found", etc.) - it returns a normal, non-throwing `AssistantMessage` with `stopReason: "error"` and `errorMessage` set (the exact shape Pi's own core `generateSummary()` already checks for). `handleSessionBeforeCompact` never checked `response.stopReason`, so any such error had empty `content` and fell straight into the "empty summary" branch, hiding the real, actionable error message entirely. Now checks `stopReason === "error"` first and surfaces `response.errorMessage` verbatim.
+- This does **not** create or corrupt any model identifier - verified `ctx.model` is used completely unmodified (no string concatenation exists anywhere in pi-dcp's model resolution) unless `compaction.summaryModel` is explicitly configured. A malformed/rejected model ID reported by the provider (e.g. `Codex error: Model not found ...`) reflects the model **the main conversation is already using** - the same object, same value.
+- Added regression tests (`tests/custom-summary.test.ts`) mocking `completeSimple` to return an error-shaped response, confirming the real error is now surfaced and the two other cases (genuinely empty non-error content, genuine success) are unaffected.
+
 ## 0.4.7
 
 - **Added `/dcp threshold <percent|null> <absolute|null>`**: sets the dual-threshold (`triggers.endOfTurn.tokenThresholdPercent`/`tokenThresholdAbsolute`) for the current session only — mutates the in-memory config the same way `/dcp enable`/`/dcp disable` already do, never touches `dcp.json`. Either value can be `null` (or `off`/`none`/`-`) to disable that side. Confirms and echoes the new effective threshold on success.

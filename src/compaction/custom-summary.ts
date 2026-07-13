@@ -83,6 +83,17 @@ export async function handleSessionBeforeCompact(
       },
     );
 
+    // completeSimple() does not throw for provider-level failures - it can return
+    // a normal (non-throwing) AssistantMessage with stopReason "error" and
+    // errorMessage set (same shape Pi's own core generateSummary() checks for).
+    // Without this check, a genuine provider error (auth, rate limit, "model not
+    // found", etc.) has empty content and was previously silently misreported as
+    // "summary was empty" - hiding the real, actionable error message entirely.
+    if (response.stopReason === "error") {
+      notify(ctx, config, `DCP compaction summary failed: ${response.errorMessage ?? "unknown provider error"}`, "error");
+      return undefined;
+    }
+
     const summary = (response.content as Array<{ type: string; text?: string }>)
       .filter((c): c is { type: string; text: string } => typeof (c as any).text === "string" && (c as any).type === "text")
       .map((c) => c.text)
