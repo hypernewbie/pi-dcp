@@ -2,6 +2,7 @@ import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { CompactionPreview, DcpConfig, ResolvedProtection } from "../types.ts";
 import { notify } from "../ui.ts";
 import { estimateTextTokens } from "../utils.ts";
@@ -14,6 +15,7 @@ export async function handleSessionBeforeCompact(
   config: DcpConfig,
   protection: ResolvedProtection,
   preview: CompactionPreview,
+  thinkingLevel: ThinkingLevel,
 ): Promise<{ compaction: { summary: string; firstKeptEntryId: string; tokensBefore: number; details: unknown } } | undefined> {
   if (!config.enabled || !config.compaction.customSummary) return undefined;
 
@@ -67,6 +69,15 @@ export async function handleSessionBeforeCompact(
     subagentArtifacts: artifacts,
   });
 
+  // Mirror Pi core's own createSummarizationOptions() (compaction.js): pass the
+  // session's current thinking level through to the summarization completion
+  // when the model supports reasoning. DCP previously omitted this entirely,
+  // unlike Pi's native compaction fallback which always sets it - some
+  // reasoning models (observed with MiniMax M3) fall back to a flattened,
+  // leak-prone plain-text output style instead of proper structured thinking
+  // blocks when a completion request doesn't signal a reasoning level at all.
+  const reasoning = model.reasoning && thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : undefined;
+
   try {
     const response = await completeSimple(
       model,
@@ -79,6 +90,7 @@ export async function handleSessionBeforeCompact(
         headers: auth.headers,
         env: auth.env,
         maxTokens: config.compaction.maxSummaryTokens,
+        reasoning,
         signal,
       },
     );

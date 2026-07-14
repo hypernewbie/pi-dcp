@@ -281,6 +281,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     // user or Pi itself asked for.
     if (initiator === "pi-native") return undefined;
 
-    return handleSessionBeforeCompact(event, ctx, state.config, state.protection, preview);
+    return handleSessionBeforeCompact(event, ctx, state.config, state.protection, preview, pi.getThinkingLevel());
   });
 }

@@ -80,7 +80,7 @@ describe("handleSessionBeforeCompact - provider error surfacing", () => {
     const notified: Array<{ message: string; type?: string }> = [];
     const ctx = makeCtx((message, type) => notified.push({ message, type }));
 
-    const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview());
+    const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "medium");
 
     expect(result).toBeUndefined();
     expect(notified.some((n) => n.type === "error" && n.message.includes("Codex error: Model not found"))).toBe(true);
@@ -96,7 +96,7 @@ describe("handleSessionBeforeCompact - provider error surfacing", () => {
     const notified: Array<{ message: string; type?: string }> = [];
     const ctx = makeCtx((message, type) => notified.push({ message, type }));
 
-    const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview());
+    const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "medium");
 
     expect(result).toBeUndefined();
     expect(notified.some((n) => n.message.includes("summary was empty"))).toBe(true);
@@ -109,9 +109,44 @@ describe("handleSessionBeforeCompact - provider error surfacing", () => {
     });
 
     const ctx = makeCtx(() => {});
-    const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview());
+    const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "medium");
 
     expect(result).toBeDefined();
     expect(result?.compaction.summary).toBe("A real summary of the conversation.");
+  });
+
+  it("passes the session's thinking level as the reasoning option for reasoning-capable models", async () => {
+    completeSimpleMock.mockResolvedValue({
+      stopReason: "stop",
+      content: [{ type: "text", text: "A real summary." }],
+    });
+
+    const ctx = makeCtx(() => {});
+    ctx.model.reasoning = true;
+
+    await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "high");
+
+    expect(completeSimpleMock).toHaveBeenCalledTimes(1);
+    const options = completeSimpleMock.mock.calls[0][2];
+    expect(options.reasoning).toBe("high");
+  });
+
+  it("omits reasoning when the thinking level is off or the model doesn't support reasoning", async () => {
+    completeSimpleMock.mockResolvedValue({
+      stopReason: "stop",
+      content: [{ type: "text", text: "A real summary." }],
+    });
+
+    const ctxOff = makeCtx(() => {});
+    ctxOff.model.reasoning = true;
+    await handleSessionBeforeCompact(makeEvent(), ctxOff, DEFAULT_CONFIG, protection, makePreview(), "off");
+    expect(completeSimpleMock.mock.calls[0][2].reasoning).toBeUndefined();
+
+    completeSimpleMock.mockClear();
+
+    const ctxNonReasoning = makeCtx(() => {});
+    ctxNonReasoning.model.reasoning = false;
+    await handleSessionBeforeCompact(makeEvent(), ctxNonReasoning, DEFAULT_CONFIG, protection, makePreview(), "high");
+    expect(completeSimpleMock.mock.calls[0][2].reasoning).toBeUndefined();
   });
 });
