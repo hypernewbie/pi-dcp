@@ -10,3 +10,4 @@ coverage/
 *.tmp-*
 *.tgz
 temp/
+.pi-subagents/
