@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.0
+
+- Added `dcp_read_session`, a bounded, read-only tool for retrieving a specific raw excerpt from earlier active-session history.
+- The tool supports listing, literal search, and ID-range reads; preserves tool-call/result pairs; and caps returned context.
+
 ## 0.5.2
 
 - Fixed the compacting indicator: it now uses a temporary above-editor card that Pi renders even after the agent leaves streaming mode.

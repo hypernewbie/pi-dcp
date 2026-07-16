@@ -10,6 +10,7 @@ A Pi extension adapted from OpenCode's DCP that gives you **controllable, config
 
 - **Automatic context relief without aborting work**: at the **lower** of a percentage-of-window threshold and an absolute token cap, folds completed older work into bounded summary blocks while the current task stays raw. Defaults (`73%` / `450k`) protect the wall on small windows (~200k) and cap cost on huge windows (~1M).
 - **Two manual modes**: `/dcp compact` folds completed work without interrupting the task; `/dcp compress` keeps the full one-shot compaction path with a detailed summary.
+- **Targeted history retrieval**: the agent can read a small raw excerpt from earlier active-session history when a specific original request, error, or tool result is missing from current context. It is read-only and bounded; it cannot dump a full session.
 - **Deterministic user-prompt preservation**: real user prompts are carried into DCP-generated summaries after the model responds, so the summarizer cannot omit them. Oversized prompts are bounded by a separate head/tail limit.
 - **Custom compaction summaries**: The one-shot path can replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files and artifact references. Bounded input budget prevents giant outputs from wrecking compaction.
 - **Subagent result preservation**: Parent-visible `subagent` results (conclusions + artifact paths) survive compaction without importing full child transcripts.
@@ -88,6 +89,10 @@ Example:
 User prompts are always carried forward in DCP-generated summaries; `protectUserMessages` controls whether they are also supplied as protected input while the summary is being written. `preservedUserMessageTokens` is the per-message cap for the deterministic carry-forward.
 
 `compaction.summaryModel` (default `null` → use the session's current model) lets you point DCP's own summarizer at a *different* model/provider (`"provider/model-id"`, e.g. `"deepseek/deepseek-v4-pro"`). Useful if your active model can't reliably complete a standalone, non-conversational request (some provider/account setups issue session-scoped model IDs that only work as part of an ongoing conversation thread, and reject a fresh, isolated completion call outright). If DCP's own summarizer fails for any reason, the real provider error is reported honestly instead of silently falling back — but pi-dcp cannot fix a model/provider that also can't complete Pi's own native fallback summary; `summaryModel` is the way to route around it.
+
+## Session history tool
+
+`dcp_read_session` is available to the agent, not as a slash command. It can list or search earlier raw active-session entries, then read a narrow range by entry ID. Each result is capped at 8,000 estimated tokens, preserves tool-call/result pairs, and never changes session history. The agent should use it only for a specific missing fact, not to retrieve a whole session.
 
 ## Commands
 

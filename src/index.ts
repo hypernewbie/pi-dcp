@@ -8,6 +8,7 @@ import {
   resetTriggerState,
 } from "./triggers.ts";
 import { registerCommands } from "./commands.ts";
+import { registerSessionReaderTool } from "./session-reader-tool.ts";
 import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
@@ -37,6 +38,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   };
 
   registerCommands(pi, state);
+  registerSessionReaderTool(pi);
 
   // Compaction receipts are rendered as durable custom session entries, not via
   // ctx.ui.notify: compaction always truncates/rewrites the visible transcript
