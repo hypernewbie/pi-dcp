@@ -327,7 +327,7 @@ function formatProtectedItem(item: ProtectedItem): string {
   if (item.path) headerParts.push(`path: ${item.path}`);
   const header = headerParts.join(" ");
   const truncNote = item.truncated ? ` [truncated ${item.originalCharacters}→${item.includedCharacters}]` : "";
-  return `<protected ${header}${truncNote}>\n${item.content}\n</protected>`;
+  return `### Preserved ${header}${truncNote}\n\n${item.content}`;
 }
 
 function escapeInline(s: string): string {

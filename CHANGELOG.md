@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Added automatic context relief that folds completed work into bounded summaries without interrupting the running task.
+- Kept `/dcp compress` as the explicit full compaction command and raised its summary ceiling to 20,000 tokens.
+- User prompts in DCP-generated summaries are carried forward deterministically, with bounded head/tail handling for oversized messages.
+- Added durable range projection, branch-safe state recovery, exact error/test evidence, and regression coverage for tool pairing and reasoning-tag failures.
+
 ## 0.4.9
 
 - **Fixed: DCP's own summarizer never signaled a reasoning/thinking level to the model, unlike Pi's native compaction fallback.** Pi core's `compaction.js` (`createSummarizationOptions`) always passes `reasoning: thinkingLevel` (the session's current thinking level) to its own summarization completion when the model supports reasoning. `custom-summary.ts` never did this - it called `completeSimple()` with no `reasoning` option at all. Reported symptom: MiniMax M3 (a reasoning model, per the separate `pi-m3fix` project) produces flattened, leaked chain-of-thought as plain text instead of proper structured thinking blocks under DCP compaction specifically, while Pi's native compaction stays clean - `pi-m3fix`'s own changelog documents that leaked-reasoning text left in context causes "the model to imitate on next turn," and a leaked-reasoning-laden DCP summary would get baked into the permanent compacted context and poison every subsequent turn. Now threads `pi.getThinkingLevel()` through to `handleSessionBeforeCompact` and passes the same `model.reasoning && thinkingLevel !== "off"` guarded `reasoning` option Pi core uses.
@@ -73,7 +80,7 @@
 - **Bounded protected content**: rewrote `buildProtectedAppendix` with typed `ProtectedItem` collector, indexed toolCall→result map, priority ordering (user messages → write/edit evidence → subagent results → other protected tools), and `maxProtectedTokens` (default 24000) input budget with deterministic truncation.
 - **Artifact-first memory**: summaries now include `Relevant Files` and `Artifacts` sections from cumulative file ops and protected subagent artifact paths; receipt reports file refs / protected blocks / subagent artifacts.
 - **Safe subagent preservation**: normalized parent-visible `subagent` results (status, bounded conclusion, output/artifact paths) via `normalizeSubagentResult`. Exempt from deduplication and error-input purge by default. Controlled by `compaction.preserveSubagentResults` (default true).
-- **Removed `<protect>` tagging**: `protectTags` config, schema, and implementation deleted — manual tagging is poor UX.
+- **Removed manual protection tagging**: the old config, schema, and implementation were deleted — manual tagging is poor UX.
 - Added `/dcp compress` alias earlier (0.2.1) retained.
 
 ## 0.2.1
@@ -109,7 +116,7 @@
 
 - Initial release.
 - End-of-turn compaction trigger with configurable token/percentage threshold and cooldown.
-- Custom DCP-style compaction summary with protected tools/files, user messages, and `<protect>` tags.
+- Custom DCP-style compaction summary with protected tools/files and user messages.
 - System-prompt nudges when context grows large.
 - `/dcp` command family for status, manual compaction, enable/disable, and config paths.
 - Experimental context-event pruning: deduplication and purge-errors (disabled by default).

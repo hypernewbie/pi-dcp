@@ -33,6 +33,18 @@ describe("shouldTriggerCompaction", () => {
     expect(shouldTriggerCompaction(DEFAULT_CONFIG, state, 450_500, 1_000_000)).toBe(false);
   });
 
+  it("can use the context-relief threshold independently", () => {
+    const config = {
+      ...DEFAULT_CONFIG,
+      contextRelief: { ...DEFAULT_CONFIG.contextRelief, triggerPercent: 50 },
+      triggers: { endOfTurn: { ...DEFAULT_CONFIG.triggers.endOfTurn, tokenThresholdPercent: 90, tokenThresholdAbsolute: null } },
+    };
+    const state = createTriggerState();
+    state.turnsSinceCompaction = 2;
+    expect(shouldTriggerCompaction(config, state, 500_001, 1_000_000, true)).toBe(true);
+    expect(shouldTriggerCompaction(config, state, 400_001, 1_000_000, true)).toBe(false);
+  });
+
   it("does not fire when both thresholds are null", () => {
     const config = {
       ...DEFAULT_CONFIG,

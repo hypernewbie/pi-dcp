@@ -39,6 +39,7 @@ const baseConfig: CompactionConfig = {
   protectedFilePatterns: null,
   protectUserMessages: false,
   maxProtectedTokens: 24000,
+  preservedUserMessageTokens: 2000,
   preserveSubagentResults: true,
   showCompression: false,
 };
@@ -57,6 +58,7 @@ describe("protected appendix", () => {
     const result = buildProtectedAppendix(messages, baseConfig, protection);
     expect(result.text).toContain("Protected Tool Outputs");
     expect(result.text).toContain("write");
+    expect(result.text).not.toMatch(/<\/?protected\b/);
     expect(result.collection.items.length).toBeGreaterThan(0);
   });
 

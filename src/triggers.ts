@@ -15,11 +15,14 @@ export function shouldTriggerCompaction(
   state: TriggerState,
   tokens: number,
   contextWindow: number,
+  useContextReliefThreshold = false,
 ): boolean {
   if (!config.enabled || !config.triggers.endOfTurn.enabled) return false;
 
   const threshold = resolveEffectiveThreshold(
-    config.triggers.endOfTurn.tokenThresholdPercent,
+    useContextReliefThreshold
+      ? (config.contextRelief.triggerPercent ?? config.triggers.endOfTurn.tokenThresholdPercent)
+      : config.triggers.endOfTurn.tokenThresholdPercent,
     config.triggers.endOfTurn.tokenThresholdAbsolute,
     contextWindow,
   );

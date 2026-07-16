@@ -8,6 +8,7 @@ import { notify } from "../ui.ts";
 import { estimateTextTokens } from "../utils.ts";
 import { renderSummaryPrompt } from "./prompt.ts";
 import { buildProtectedAppendix } from "./protected-appendix.ts";
+import { appendPreservedUserMessages } from "./user-prompts.ts";
 
 export async function handleSessionBeforeCompact(
   event: SessionBeforeCompactEvent,
@@ -45,7 +46,11 @@ export async function handleSessionBeforeCompact(
   }
 
   const conversationText = serializeConversation(convertToLlm(allMessages));
-  const protectedResult = buildProtectedAppendix(allMessages, config.compaction, protection);
+  const protectedResult = buildProtectedAppendix(
+    allMessages,
+    { ...config.compaction, protectUserMessages: false },
+    protection,
+  );
 
   const cumulativeFileOps = collectCumulativeFileOps(event);
   const readFiles = [...cumulativeFileOps.read]
@@ -77,6 +82,14 @@ export async function handleSessionBeforeCompact(
   // leak-prone plain-text output style instead of proper structured thinking
   // blocks when a completion request doesn't signal a reasoning level at all.
   const reasoning = model.reasoning && thinkingLevel && thinkingLevel !== "off" ? thinkingLevel : undefined;
+  const outputLimit = typeof model.maxTokens === "number" && model.maxTokens > 0
+    ? Math.min(config.compaction.maxSummaryTokens, model.maxTokens)
+    : config.compaction.maxSummaryTokens;
+  if (typeof model.contextWindow === "number" && model.contextWindow > 0 &&
+      estimateTextTokens(systemPrompt) + estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) {
+    notify(ctx, config, "DCP summary model cannot fit this compaction request; falling back to default", "warning");
+    return undefined;
+  }
 
   try {
     const response = await completeSimple(
@@ -89,7 +102,7 @@ export async function handleSessionBeforeCompact(
         apiKey: auth.apiKey,
         headers: auth.headers,
         env: auth.env,
-        maxTokens: config.compaction.maxSummaryTokens,
+        maxTokens: outputLimit,
         reasoning,
         signal,
       },
@@ -116,14 +129,23 @@ export async function handleSessionBeforeCompact(
       return undefined;
     }
 
+    // User prompts are appended after the model completes. This is deliberately
+    // deterministic: the summarizer cannot omit or paraphrase them.
+    const preservedSummary = appendPreservedUserMessages(
+      summary,
+      allMessages,
+      previousSummary,
+      config.compaction.preservedUserMessageTokens,
+    );
+
     const prevRun = findPreviousDcpRunInfo(event);
     const runNumber = prevRun.runNumber + 1;
     const cumulativeRemovedTokens = prevRun.cumulativeRemovedTokens + preview.removedTokensThisRun;
-    const summaryTokensThisRun = estimateTextTokens(summary);
+    const summaryTokensThisRun = estimateTextTokens(preservedSummary);
 
     return {
       compaction: {
-        summary,
+        summary: preservedSummary,
         firstKeptEntryId,
         tokensBefore,
         details: {

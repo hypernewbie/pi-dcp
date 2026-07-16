@@ -4,7 +4,6 @@ import { loadConfig, loadPiCompactionSettings, validateThreshold } from "./confi
 import { createTriggerState } from "./state.ts";
 import {
   shouldTriggerCompaction,
-  triggerCompaction,
   recordCompactionCompleted,
   resetTriggerState,
 } from "./triggers.ts";
@@ -16,6 +15,8 @@ import { createCompactionPreview, buildCompactionReceiptText } from "./compactio
 import type { DcpRunInfo } from "./compaction-bar.ts";
 import { notify, debug } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
+import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, retireVirtualBlock } from "./virtual-blocks.ts";
+import { projectVirtualBlocks } from "./context-projector.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
 import type { CompactionInitiator } from "./types.ts";
 
@@ -32,6 +33,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       initial.config.protectedFilePatterns,
     ),
     stats: createEmptyStats(),
+    virtualBlocks: [],
   };
 
   registerCommands(pi, state);
@@ -74,6 +76,12 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       state.stats = createEmptyStats();
     }
 
+    try {
+      state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
+    } catch {
+      state.virtualBlocks = [];
+    }
+
     for (const warning of fresh.warnings) {
       notify(ctx, state.config, warning, "warning");
     }
@@ -81,7 +89,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow ?? 0;
     const piCompaction = loadPiCompactionSettings(ctx.cwd, ctx.isProjectTrusted());
     for (const warning of validateThreshold(
-      state.config.triggers.endOfTurn.tokenThresholdPercent,
+      state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
       state.config.triggers.endOfTurn.tokenThresholdAbsolute,
       contextWindow,
       piCompaction,
@@ -91,25 +99,44 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     }
   });
 
-  // Checked on turn_end (fires after every individual assistant message + tool-result
-  // step, not just once the whole run settles) so the token cap actually matters for a
-  // long multi-step run on a small/mid context window - by the time an "agent_settled"
-  // style check would run, a big autonomous task may have already blown past the
-  // absolute cost cap this trigger exists for. ctx.compact() unconditionally aborts
-  // whatever the agent is doing first, so firing here can interrupt an in-flight
-  // tool-call loop; triggerCompaction() detects that and re-prompts to resume the
-  // task afterward (triggers.endOfTurn.autoContinue, default true) instead of leaving
-  // the run dead.
-  pi.on("turn_end", (_event, ctx) => {
-    if (!state.config.enabled || !state.config.triggers.endOfTurn.enabled) return;
+  // Checked after each assistant/tool step. Automatic pressure relief creates a
+  // bounded summary block and never starts Pi's aborting compaction primitive.
+  pi.on("turn_end", async (_event, ctx) => {
+    if (!state.config.enabled || !state.config.triggers.endOfTurn.enabled || !state.config.contextRelief.enabled) return;
 
     const usage = ctx.getContextUsage();
     if (!usage || usage.tokens === null) return;
 
     state.triggerState.turnsSinceCompaction++;
+    if (!shouldTriggerCompaction(state.config, state.triggerState, usage.tokens, usage.contextWindow, true)) return;
+    if (state.triggerState.isCompacting) return;
 
-    if (shouldTriggerCompaction(state.config, state.triggerState, usage.tokens, usage.contextWindow)) {
-      triggerCompaction(pi, ctx, state.config, state.triggerState, undefined, "dcp-dual-threshold");
+    state.triggerState.isCompacting = true;
+    try {
+      state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
+      const block = await createVirtualBlock(
+        pi,
+        ctx,
+        state.config,
+        state.protection,
+        state.virtualBlocks,
+        undefined,
+        pi.getThinkingLevel(),
+      );
+      if (!block) return;
+      appendVirtualBlock(pi, block);
+      if (state.config.notification !== "off") {
+        appendVirtualBlockReceipt(pi, block, {
+          number: state.virtualBlocks.length + 1,
+          activeWorkingSetTokens: state.config.contextRelief.activeWorkingSetTokens,
+        });
+      }
+      state.virtualBlocks.push(block);
+      state.triggerState.turnsSinceCompaction = 0;
+      state.triggerState.tokensAtLastCompaction = usage.tokens;
+      debug(ctx, state.config, `Compacted completed work (~${block.estimatedRawTokens.toLocaleString()} tokens)`);
+    } finally {
+      state.triggerState.isCompacting = false;
     }
   });
 
@@ -223,13 +250,46 @@ export default function dcpExtension(pi: ExtensionAPI): void {
 
     state.compactionPreview = undefined;
     state.triggerState.pendingInitiator = null;
+
+    // A native compaction may remove the raw range referenced by a block. Such
+    // blocks can no longer be projected and are retired from the active index.
+    try {
+      const activeIds = new Set(ctx.sessionManager.buildContextEntries().map((entry) => entry.id));
+      const stillActive = [];
+      for (const block of state.virtualBlocks) {
+        if (activeIds.has(block.startEntryId) && activeIds.has(block.endEntryId)) {
+          stillActive.push(block);
+        } else {
+          retireVirtualBlock(pi, block.id);
+        }
+      }
+      state.virtualBlocks = stillActive;
+    } catch {
+      // Keep state unchanged if the host is in the middle of rebuilding its branch.
+    }
   });
 
-  // Context-event pruning is experimental and disabled by default.
+  // Project durable summaries first, then apply optional request-only pruning.
   pi.on("context", (event, ctx) => {
-    if (!state.config.enabled || !state.config.pruning.enabled) return undefined;
+    if (!state.config.enabled) return undefined;
 
-    const result = pruneContext(event.messages, state.config.pruning, state.protection);
+    let messages = event.messages;
+    try {
+      const branch = ctx.sessionManager.getBranch();
+      state.virtualBlocks = rebuildVirtualBlocks(branch);
+      const contextEntries = ctx.sessionManager.buildContextEntries();
+      messages = projectVirtualBlocks(event.messages, contextEntries, state.virtualBlocks);
+      if (messages === event.messages && state.virtualBlocks.length > 0) {
+        debug(ctx, state.config, "Context summary projection did not map this request; leaving raw context unchanged.");
+      }
+    } catch (error) {
+      debug(ctx, state.config, `Context summary projection failed open: ${error instanceof Error ? error.message : String(error)}`);
+      // Projection is fail-open: request-only pruning may still run below.
+    }
+    const result = state.config.pruning.enabled
+      ? pruneContext(messages, state.config.pruning, state.protection)
+      : { messages, stats: { deduplicated: 0, errorsPurged: 0, deduplicatedIds: [], purgedIds: [] } };
+    messages = result.messages;
     const total = result.stats.deduplicated + result.stats.errorsPurged;
 
     if (total > 0) {
@@ -264,7 +324,8 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       }
     }
 
-    return { messages: result.messages };
+    if (messages !== event.messages || total > 0) return { messages };
+    return undefined;
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
@@ -273,9 +334,9 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const preview = createCompactionPreview(event, initiator, focusIsUserSupplied);
     state.compactionPreview = preview;
 
-    // Only substitute DCP's own custom summary when pi-dcp itself asked for this
-    // compaction (via /dcp compact or the dual-threshold trigger). A plain native
-    // /compact, or Pi's own threshold/overflow auto-compaction, gets Pi's own
+    // Only substitute DCP's own custom summary when pi-dcp explicitly asked for
+    // the one-shot /dcp compress path. A plain native /compact, or Pi's own
+    // threshold/overflow auto-compaction, gets Pi's own
     // default summary untouched - pi-dcp still reports it honestly (as
     // "PI COMPACT", never a fake DCP run identity) without hijacking what the
     // user or Pi itself asked for.

@@ -17,6 +17,7 @@ const TOP_LEVEL_KEYS = new Set([
   "pruning",
   "triggers",
   "compaction",
+  "contextRelief",
   "protectedTools",
   "protectedFilePatterns",
   "commands",
@@ -58,13 +59,25 @@ export const DEFAULT_CONFIG: DcpConfig = {
   compaction: {
     customSummary: true,
     summaryModel: null,
-    maxSummaryTokens: 8_192,
+    maxSummaryTokens: 20_000,
     protectedTools: null,
     protectedFilePatterns: null,
     protectUserMessages: false,
     maxProtectedTokens: 24_000,
+    preservedUserMessageTokens: 2_000,
     preserveSubagentResults: true,
     showCompression: false,
+  },
+
+  contextRelief: {
+    enabled: true,
+    triggerPercent: null,
+    targetHeadroomTokens: 60_000,
+    maxChunkInputTokens: 60_000,
+    maxChunkSummaryTokens: 25_000,
+    exactEvidenceTokens: 8_000,
+    preservedUserMessageTokens: 2_000,
+    activeWorkingSetTokens: 35_000,
   },
 
   // Pi-native equivalents of DCP's protected write/edit tools.
@@ -141,6 +154,9 @@ function mergeOne(base: DcpConfig, override: PartialDcpConfig): DcpConfig {
   }
   if (override.compaction) {
     out.compaction = mergeCompaction(out.compaction, override.compaction);
+  }
+  if (override.contextRelief) {
+    out.contextRelief = { ...out.contextRelief, ...override.contextRelief };
   }
   if (override.commands) {
     out.commands = { ...out.commands, ...override.commands };
@@ -220,6 +236,52 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
     "triggers.endOfTurn.cooldownTurns",
     warnings,
   );
+  merged.contextRelief.triggerPercent = normalizePercent(
+    merged.contextRelief.triggerPercent,
+    DEFAULT_CONFIG.contextRelief.triggerPercent,
+    "contextRelief.triggerPercent",
+    warnings,
+  );
+  merged.contextRelief.targetHeadroomTokens = normalizeInteger(
+    merged.contextRelief.targetHeadroomTokens,
+    DEFAULT_CONFIG.contextRelief.targetHeadroomTokens,
+    "contextRelief.targetHeadroomTokens",
+    warnings,
+  );
+  merged.contextRelief.maxChunkInputTokens = normalizeInteger(
+    merged.contextRelief.maxChunkInputTokens,
+    DEFAULT_CONFIG.contextRelief.maxChunkInputTokens,
+    "contextRelief.maxChunkInputTokens",
+    warnings,
+  );
+  merged.contextRelief.maxChunkSummaryTokens = normalizeInteger(
+    merged.contextRelief.maxChunkSummaryTokens,
+    DEFAULT_CONFIG.contextRelief.maxChunkSummaryTokens,
+    "contextRelief.maxChunkSummaryTokens",
+    warnings,
+  );
+  merged.contextRelief.exactEvidenceTokens = normalizeInteger(
+    merged.contextRelief.exactEvidenceTokens,
+    DEFAULT_CONFIG.contextRelief.exactEvidenceTokens,
+    "contextRelief.exactEvidenceTokens",
+    warnings,
+  );
+  merged.contextRelief.preservedUserMessageTokens = normalizeInteger(
+    merged.contextRelief.preservedUserMessageTokens,
+    DEFAULT_CONFIG.contextRelief.preservedUserMessageTokens,
+    "contextRelief.preservedUserMessageTokens",
+    warnings,
+  );
+  merged.contextRelief.activeWorkingSetTokens = normalizeInteger(
+    merged.contextRelief.activeWorkingSetTokens,
+    DEFAULT_CONFIG.contextRelief.activeWorkingSetTokens,
+    "contextRelief.activeWorkingSetTokens",
+    warnings,
+  );
+  if (typeof merged.contextRelief.enabled !== "boolean") {
+    warnings.push(`Invalid contextRelief.enabled; using ${String(DEFAULT_CONFIG.contextRelief.enabled)}.`);
+    merged.contextRelief.enabled = DEFAULT_CONFIG.contextRelief.enabled;
+  }
   merged.compaction.maxSummaryTokens = normalizeInteger(
     merged.compaction.maxSummaryTokens,
     DEFAULT_CONFIG.compaction.maxSummaryTokens,
@@ -230,6 +292,12 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
     merged.compaction.maxProtectedTokens,
     DEFAULT_CONFIG.compaction.maxProtectedTokens,
     "compaction.maxProtectedTokens",
+    warnings,
+  );
+  merged.compaction.preservedUserMessageTokens = normalizeInteger(
+    merged.compaction.preservedUserMessageTokens,
+    DEFAULT_CONFIG.compaction.preservedUserMessageTokens,
+    "compaction.preservedUserMessageTokens",
     warnings,
   );
   if (typeof merged.compaction.preserveSubagentResults !== "boolean") {

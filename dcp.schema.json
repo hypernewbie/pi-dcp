@@ -11,6 +11,7 @@
     "pruning": { "$ref": "#/$defs/pruning" },
     "triggers": { "$ref": "#/$defs/triggers" },
     "compaction": { "$ref": "#/$defs/compaction" },
+    "contextRelief": { "$ref": "#/$defs/contextRelief" },
     "protectedTools": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "protectedFilePatterns": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "commands": {
@@ -73,17 +74,32 @@
         }
       }
     },
+    "contextRelief": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "triggerPercent": { "type": ["number", "null"], "minimum": 0, "maximum": 100, "default": null },
+        "targetHeadroomTokens": { "type": "integer", "minimum": 0, "default": 60000 },
+        "maxChunkInputTokens": { "type": "integer", "minimum": 1, "default": 60000 },
+        "maxChunkSummaryTokens": { "type": "integer", "minimum": 1, "default": 25000 },
+        "exactEvidenceTokens": { "type": "integer", "minimum": 0, "default": 8000 },
+        "preservedUserMessageTokens": { "type": "integer", "minimum": 1000, "default": 2000 },
+        "activeWorkingSetTokens": { "type": "integer", "minimum": 0, "default": 35000 }
+      }
+    },
     "compaction": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "customSummary": { "type": "boolean", "default": true },
         "summaryModel": { "type": ["string", "null"] },
-        "maxSummaryTokens": { "type": "integer", "minimum": 1, "default": 8192 },
+        "maxSummaryTokens": { "type": "integer", "minimum": 1, "default": 20000 },
         "protectedTools": { "type": ["array", "null"], "items": { "type": "string" } },
         "protectedFilePatterns": { "type": ["array", "null"], "items": { "type": "string" } },
         "protectUserMessages": { "type": "boolean", "default": false },
         "maxProtectedTokens": { "type": "integer", "minimum": 1000, "default": 24000 },
+        "preservedUserMessageTokens": { "type": "integer", "minimum": 1000, "default": 2000 },
         "preserveSubagentResults": { "type": "boolean", "default": true },
         "showCompression": { "type": "boolean", "default": false }
       }

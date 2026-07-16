@@ -4,6 +4,7 @@ import { triggerCompaction, resetTriggerState } from "./triggers.ts";
 import { notify } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
+import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks } from "./virtual-blocks.ts";
 
 export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
   pi.registerCommand("dcp", {
@@ -17,9 +18,11 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
 
       switch (lc) {
         case "compact":
+          return handleVirtualCompact(pi, ctx, state, restArgs, false);
+        case "compact_continue":
+          return handleVirtualCompact(pi, ctx, state, restArgs, true);
         case "compress":
           return handleCompact(pi, ctx, state, restArgs, false);
-        case "compact_continue":
         case "compress_continue":
           return handleCompact(pi, ctx, state, restArgs, true);
         case "threshold":
@@ -43,6 +46,57 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
       }
     },
   });
+}
+
+async function handleVirtualCompact(
+  pi: ExtensionAPI,
+  ctx: ExtensionCommandContext,
+  state: RuntimeState,
+  args: string,
+  continueRequested: boolean,
+): Promise<void> {
+  if (!state.config.enabled) {
+    notify(ctx, state.config, "pi-dcp is disabled", "warning");
+    return;
+  }
+  if (!state.config.contextRelief.enabled) {
+    notify(ctx, state.config, "Compact is disabled in configuration", "warning");
+    return;
+  }
+  if (continueRequested) {
+    notify(ctx, state.config, "Compact does not interrupt a running task; continuing is automatic.", "info");
+  }
+  if (state.triggerState.isCompacting) return;
+  state.triggerState.isCompacting = true;
+  try {
+    state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
+    const block = await createVirtualBlock(
+      pi,
+      ctx,
+      state.config,
+      state.protection,
+      state.virtualBlocks,
+      args.trim() || undefined,
+      pi.getThinkingLevel(),
+    );
+    if (!block) {
+      notify(ctx, state.config, "No completed work was available to compact.", "info");
+      return;
+    }
+    appendVirtualBlock(pi, block);
+    if (state.config.notification !== "off") {
+      appendVirtualBlockReceipt(pi, block, {
+        number: state.virtualBlocks.length + 1,
+        activeWorkingSetTokens: state.config.contextRelief.activeWorkingSetTokens,
+      });
+    }
+    state.virtualBlocks.push(block);
+    state.triggerState.turnsSinceCompaction = 0;
+    state.triggerState.tokensAtLastCompaction = ctx.getContextUsage()?.tokens ?? null;
+    notify(ctx, state.config, `Compacted completed work (~${block.estimatedRawTokens.toLocaleString()} tokens).`, "info");
+  } finally {
+    state.triggerState.isCompacting = false;
+  }
 }
 
 async function handleCompact(
@@ -86,6 +140,7 @@ async function handleThreshold(ctx: ExtensionCommandContext, state: RuntimeState
   }
 
   state.config.triggers.endOfTurn.tokenThresholdPercent = percent;
+  state.config.contextRelief.triggerPercent = percent;
   state.config.triggers.endOfTurn.tokenThresholdAbsolute = absolute;
 
   const usage = ctx.getContextUsage();
@@ -143,8 +198,10 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
     "  /dcp                 Show this help and current status",
     "  /dcp status          Show current context/threshold status",
     "  /dcp stats           Show compaction/pruning stats (current branch)",
-    "  /dcp compact|compress [focus] Compact now; optional focus guides the summary",
-    "  /dcp compact_continue|compress_continue [focus] Compact now, then resume the interrupted task afterward",
+    "  /dcp compact [focus] Fold older completed work into a summary without interrupting the task",
+    "  /dcp compress [focus] Run full one-shot context compaction with a detailed summary",
+    "  /dcp compact_continue [focus] Same as compact; the task continues automatically",
+    "  /dcp compress_continue [focus] Compress now, then resume the interrupted task afterward",
     "  /dcp threshold <percent|null> <absolute|null> Set dual-threshold for this session only (not saved)",
     "  /dcp enable          Enable pi-dcp for this session",
     "  /dcp disable         Disable pi-dcp for this session",
@@ -170,11 +227,11 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
   const usage = ctx.getContextUsage();
   const win = usage?.contextWindow ?? 0;
   const effective = resolveEffectiveThreshold(
-    state.config.triggers.endOfTurn.tokenThresholdPercent,
+    state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
     state.config.triggers.endOfTurn.tokenThresholdAbsolute,
     win,
   );
-  const pct = state.config.triggers.endOfTurn.tokenThresholdPercent;
+  const pct = state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent;
   const abs = state.config.triggers.endOfTurn.tokenThresholdAbsolute;
 
   const lines = [

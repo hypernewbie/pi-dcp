@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { resolve } from "node:path";
 
 const EXTENSION_PATH = resolve(import.meta.dirname, "../src/index.ts");
@@ -226,11 +226,91 @@ describe("extension entry point", () => {
     // actually attempt its own custom summary here (and fall back honestly,
     // since there's no model in this test).
     const dcpCommand = commands.find((c) => c.name === "dcp")!;
-    await dcpCommand.handler!("compact", ctx);
+    await dcpCommand.handler!("compress", ctx);
     for (const h of hooks["session_before_compact"] ?? []) {
       await h(makeBeforeEvent("manual"), ctx);
     }
     expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(true);
+  });
+
+  it("context hook injects a persisted summary while keeping the active suffix raw", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const oldMessage = (id: string, role: string, text: string) => ({ type: "message", id, parentId: null, timestamp: new Date().toISOString(), message: { role, content: [{ type: "text", text }], timestamp: Date.now() } });
+    const branch: any[] = [
+      oldMessage("u1", "user", "old request"),
+      oldMessage("a1", "assistant", "old result"),
+      { type: "custom", id: "b1", parentId: "a1", timestamp: new Date().toISOString(), customType: "dcp-context-range.v1", data: { version: 1, block: { version: 1, id: "block-1", startEntryId: "u1", endEntryId: "a1", anchorEntryId: "u1", summary: "old phase preserved", exactEvidence: "", preservedUserMessages: ["old request"], estimatedRawTokens: 20, estimatedBlockTokens: 4, active: true, createdAt: Date.now() } } },
+      oldMessage("u2", "user", "active request"),
+    ];
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+    const ctx: any = {
+      hasUI: false,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: () => {} },
+      getContextUsage: () => ({ tokens: 10, contextWindow: 100 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+    };
+    for (const handler of hooks["session_start"] ?? []) await handler({ type: "session_start", reason: "new" }, ctx);
+    const raw = branch.filter((entry) => entry.type === "message").map((entry) => entry.message);
+    const result = await hooks["context"][0]({ type: "context", messages: raw }, ctx);
+    expect(result.messages).toHaveLength(2);
+    expect(JSON.stringify(result.messages[0])).toContain("old phase preserved");
+    expect(JSON.stringify(result.messages[1])).toContain("active request");
+  });
+
+  it("automatic threshold relief does not call Pi's aborting compact primitive", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers) as any;
+    mod.default(mockApi as any);
+    const compact = vi.fn();
+    const ctx: any = {
+      hasUI: false,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: () => {} },
+      getContextUsage: () => ({ tokens: 500_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
+      model: undefined,
+      compact,
+      getThinkingLevel: () => "off",
+    };
+    for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+    expect(compact).not.toHaveBeenCalled();
+    await commands.find((command) => command.name === "dcp")?.handler?.("compact", ctx);
+    expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("exposes plain command help without internal architecture terms", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+    const notices: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (text: string) => notices.push(text) },
+      getContextUsage: () => ({ tokens: 1, contextWindow: 100 }),
+      sessionManager: { getBranch: () => [] },
+    };
+    for (const handler of hooks["session_start"] ?? []) await handler({ type: "session_start", reason: "new" }, ctx);
+    await commands.find((command) => command.name === "dcp")?.handler?.("help", ctx);
+    const help = notices.join("\n");
+    expect(help).toContain("compact");
+    expect(help).toContain("compress");
+    expect(help).not.toMatch(/PLAN3|virtual block|legacy kung fu|slopleak/i);
   });
 
   it("/dcp threshold sets the dual-threshold for this session only, without touching config files", async () => {

@@ -64,6 +64,8 @@ export interface CompactionConfig {
   protectUserMessages: boolean;
   /** Max tokens for protected input to the summarizer */
   maxProtectedTokens: number;
+  /** Per-message cap for deterministic verbatim user-prompt carry-forward */
+  preservedUserMessageTokens: number;
   /** Whether to preserve parent-visible subagent results */
   preserveSubagentResults: boolean;
   /** Show the actual committed summary text in the compaction receipt (OpenCode: showCompression, default off) */
@@ -72,6 +74,37 @@ export interface CompactionConfig {
 
 export interface CommandsConfig {
   enabled: boolean;
+}
+
+export interface ContextReliefConfig {
+  enabled: boolean;
+  triggerPercent: number | null;
+  targetHeadroomTokens: number;
+  maxChunkInputTokens: number;
+  maxChunkSummaryTokens: number;
+  exactEvidenceTokens: number;
+  preservedUserMessageTokens: number;
+  activeWorkingSetTokens: number;
+}
+
+export interface VirtualCompressionBlock {
+  version: 1;
+  id: string;
+  startEntryId: string;
+  endEntryId: string;
+  anchorEntryId: string;
+  summary: string;
+  exactEvidence: string;
+  preservedUserMessages: string[];
+  estimatedRawTokens: number;
+  estimatedBlockTokens: number;
+  active: boolean;
+  createdAt: number;
+}
+
+export interface DcpBlockEntryData {
+  version: 1;
+  block: VirtualCompressionBlock;
 }
 
 export interface PiCompactionSettings {
@@ -140,6 +173,7 @@ export interface RuntimeState {
   loaded: LoadedConfig;
   triggerState: TriggerState;
   protection: ResolvedProtection;
+  virtualBlocks: VirtualCompressionBlock[];
   compactionPreview?: CompactionPreview;
   stats?: StatsState;
 }
@@ -151,6 +185,7 @@ export interface DcpConfig {
   pruning: PruningConfig;
   triggers: TriggersConfig;
   compaction: CompactionConfig;
+  contextRelief: ContextReliefConfig;
   protectedTools: string[];
   protectedFilePatterns: string[];
   commands: CommandsConfig;

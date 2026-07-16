@@ -50,7 +50,7 @@ function makeEvent(): any {
 function makeCtx(notify: (message: string, type?: string) => void): any {
   return {
     hasUI: true,
-    model: { provider: "openai-codex", id: "gpt-5.6-luna-free-1p-codexswic-ev3", api: "openai-responses" },
+    model: { provider: "openai-codex", id: "gpt-5.6-luna-free-1p-codexswic-ev3", api: "openai-responses", maxTokens: 100_000 },
     modelRegistry: {
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "test-key", headers: {}, env: {} }),
       find: () => undefined,
@@ -112,7 +112,31 @@ describe("handleSessionBeforeCompact - provider error surfacing", () => {
     const result = await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "medium");
 
     expect(result).toBeDefined();
-    expect(result?.compaction.summary).toBe("A real summary of the conversation.");
+    expect(result?.compaction.summary).toContain("A real summary of the conversation.");
+    expect(result?.compaction.summary).toContain("u1");
+    expect(result?.compaction.summary).toContain("verbatim, preserved by DCP");
+  });
+
+  it("uses the 20,000-token ceiling for the explicit one-shot summary path by default", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "A real summary." }] });
+    await handleSessionBeforeCompact(makeEvent(), makeCtx(() => {}), DEFAULT_CONFIG, protection, makePreview(), "off");
+    expect(completeSimpleMock.mock.calls[0][2].maxTokens).toBe(20_000);
+  });
+
+  it("uses the configured ceiling when a provider omits model.maxTokens", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "A real summary." }] });
+    const ctx = makeCtx(() => {});
+    delete ctx.model.maxTokens;
+    await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "off");
+    expect(completeSimpleMock.mock.calls[0][2].maxTokens).toBe(20_000);
+  });
+
+  it("clamps the configured ceiling to the model's supported output limit", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "A real summary." }] });
+    const ctx = makeCtx(() => {});
+    ctx.model.maxTokens = 8_192;
+    await handleSessionBeforeCompact(makeEvent(), ctx, DEFAULT_CONFIG, protection, makePreview(), "off");
+    expect(completeSimpleMock.mock.calls[0][2].maxTokens).toBe(8_192);
   });
 
   it("passes the session's thinking level as the reasoning option for reasoning-capable models", async () => {

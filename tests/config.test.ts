@@ -28,6 +28,13 @@ describe("mergeConfig", () => {
     expect(merged.protectedTools).toContain("write");
   });
 
+  it("deep-merges context relief settings without losing defaults", () => {
+    const merged = mergeConfig(DEFAULT_CONFIG, { contextRelief: { maxChunkInputTokens: 12_000 } });
+    expect(merged.contextRelief.maxChunkInputTokens).toBe(12_000);
+    expect(merged.contextRelief.activeWorkingSetTokens).toBe(DEFAULT_CONFIG.contextRelief.activeWorkingSetTokens);
+    expect(merged.compaction.maxSummaryTokens).toBe(20_000);
+  });
+
   it("deep-merges nested objects", () => {
     const merged = mergeConfig(DEFAULT_CONFIG, {
       triggers: {

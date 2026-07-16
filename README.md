@@ -8,8 +8,10 @@ A Pi extension adapted from OpenCode's DCP that gives you **controllable, config
 
 ## What it does
 
-- **Dual-threshold compaction triggers**: fire `ctx.compact()` at the **lower** of a percentage-of-window threshold and an absolute token cap. Defaults (`73%` / `450k`) protect the wall on small windows (~200k) and cap cost on huge windows (~1M) — no per-model tuning.
-- **Custom compaction summaries**: Replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files, user messages, and artifact references. Bounded input budget prevents giant outputs from wrecking compaction.
+- **Automatic context relief without aborting work**: at the **lower** of a percentage-of-window threshold and an absolute token cap, folds completed older work into bounded summary blocks while the current task stays raw. Defaults (`73%` / `450k`) protect the wall on small windows (~200k) and cap cost on huge windows (~1M).
+- **Two manual modes**: `/dcp compact` folds completed work without interrupting the task; `/dcp compress` keeps the full one-shot compaction path with a detailed summary.
+- **Deterministic user-prompt preservation**: real user prompts are carried into DCP-generated summaries after the model responds, so the summarizer cannot omit them. Oversized prompts are bounded by a separate head/tail limit.
+- **Custom compaction summaries**: The one-shot path can replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files and artifact references. Bounded input budget prevents giant outputs from wrecking compaction.
 - **Subagent result preservation**: Parent-visible `subagent` results (conclusions + artifact paths) survive compaction without importing full child transcripts.
 - **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls (subagent results are exempt).
 - **OpenCode-faithful compression receipt**: for genuine DCP compressions, a cumulative `▣ DCP | -X removed, +Y summary` header, a per-run `▣ Compression #N` line, `░ ⣿ █` part bar, and `→ Items:`/`→ Origin:` lines — same shape as OpenCode DCP's own notification. Native Pi compactions are labelled `PI COMPACT` and never claim a fake DCP run identity.
@@ -57,11 +59,21 @@ Example:
   "compaction": {
     "customSummary": true,
     "summaryModel": null,
-    "maxSummaryTokens": 8192,
+    "maxSummaryTokens": 20000,
     "maxProtectedTokens": 24000,
+    "preservedUserMessageTokens": 2000,
     "preserveSubagentResults": true,
     "protectUserMessages": false,
     "showCompression": false
+  },
+  "contextRelief": {
+    "enabled": true,
+    "targetHeadroomTokens": 60000,
+    "maxChunkInputTokens": 60000,
+    "maxChunkSummaryTokens": 25000,
+    "exactEvidenceTokens": 8000,
+    "preservedUserMessageTokens": 2000,
+    "activeWorkingSetTokens": 35000
   },
   "pruning": {
     "enabled": false,
@@ -73,6 +85,8 @@ Example:
 }
 ```
 
+User prompts are always carried forward in DCP-generated summaries; `protectUserMessages` controls whether they are also supplied as protected input while the summary is being written. `preservedUserMessageTokens` is the per-message cap for the deterministic carry-forward.
+
 `compaction.summaryModel` (default `null` → use the session's current model) lets you point DCP's own summarizer at a *different* model/provider (`"provider/model-id"`, e.g. `"deepseek/deepseek-v4-pro"`). Useful if your active model can't reliably complete a standalone, non-conversational request (some provider/account setups issue session-scoped model IDs that only work as part of an ongoing conversation thread, and reject a fresh, isolated completion call outright). If DCP's own summarizer fails for any reason, the real provider error is reported honestly instead of silently falling back — but pi-dcp cannot fix a model/provider that also can't complete Pi's own native fallback summary; `summaryModel` is the way to route around it.
 
 ## Commands
@@ -82,8 +96,10 @@ Example:
 | `/dcp` | Show commands and current status: enabled, tokens, thresholds, settings |
 | `/dcp status` | Show detailed status including last compaction |
 | `/dcp stats` | Show compaction/pruning stats (current branch) |
-| `/dcp compact [focus]` / `/dcp compress [focus]` | Trigger compaction now with optional focus text |
-| `/dcp compact_continue [focus]` / `/dcp compress_continue [focus]` | Same, but always resumes the interrupted task afterward (`ctx.compact()` aborts current work first) — regardless of `triggers.endOfTurn.autoContinue` |
+| `/dcp compact [focus]` | Fold older completed work into a summary without interrupting the task |
+| `/dcp compress [focus]` | Run full one-shot context compaction with a detailed summary |
+| `/dcp compact_continue [focus]` | Same as `/dcp compact`; the task continues automatically |
+| `/dcp compress_continue [focus]` | Compress now, then resume the interrupted task afterward |
 | `/dcp threshold <percent\|null> <absolute\|null>` | Set the dual-threshold for this session only (in-memory, not written to `dcp.json`) |
 | `/dcp enable` / `/dcp disable` | Toggle for this session |
 | `/dcp config` | Show config paths and any load warnings |
@@ -107,7 +123,7 @@ This adapts automatically across windows with **zero per-model config**:
 
 A big window is a *ceiling, not a target* — the absolute cap prevents filling a 1M window (≈ $10/turn) just because the model allows it. Either threshold can be set to `null` to disable it; both `null` defers entirely to Pi's built-in compaction.
 
-The check runs on every turn (`turn_end`), including mid-task inside a long multi-step tool-call loop — not just once a task fully finishes. That's deliberate: on a large context window, waiting until the whole task settles could mean burning far past the absolute cost cap before pi-dcp ever gets a look-in. The tradeoff is that Pi's `ctx.compact()` always aborts whatever the agent is currently doing before it compacts (Pi has no safe mid-loop compact-and-continue primitive) — so a threshold crossed mid-task can cut a running tool-call loop short. `triggers.endOfTurn.autoContinue` (default `true`, **a Pi-only addition not present in upstream OpenCode DCP**) detects that case and automatically re-prompts to resume the interrupted task once compaction finishes, instead of leaving the run dead. Set it to `false` to compact-and-stop instead (you resume manually). This only applies to the automatic dual-threshold trigger — a plain manual `/dcp compact`/`/dcp compress` never auto-continues on its own; use `/dcp compact_continue`/`/dcp compress_continue` to always resume regardless of this setting.
+The check runs on every turn (`turn_end`), including mid-task inside a long multi-step tool-call loop. Automatic relief folds one completed range at a time and does not abort the running task. If no completed range is available, Pi's own safety compaction remains available. The `autoContinue` setting applies to the explicit `/dcp compress` path and its automatic legacy fallback; `/dcp compact` never needs a resume nudge.
 
 ## Compaction notifications
 
