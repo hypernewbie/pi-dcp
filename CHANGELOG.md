@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.2
+
+- Renamed the footer status to `vctx` (virtual context) for clarity.
+
 ## 0.6.1
 
 - **Fixed: stored context summaries frequently failed to apply to live requests, leaving the real provider context raw.** Projection previously required exact JSON equality between live agent messages and stored session copies and abandoned every summary on any mismatch. Live messages legitimately differ in usage/timestamps/metadata, so compression silently became a no-op (observed as GPT running at 97-100% context and a native overflow compaction). Mapping now compares stable conversational identity, retains unmatched live messages, applies each verified summary independently, and refuses only replacements that would orphan a live tool call/result pair.

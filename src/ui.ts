@@ -55,7 +55,7 @@ export function setProjectedContextStatus(
     const percent = status.contextWindow > 0
       ? ` (${Math.round((status.projectedTokens / status.contextWindow) * 100)}%)`
       : "";
-    ctx.ui.setStatus("dcp", `dcp sent ~${formatTokens(status.projectedTokens)}${percent}`);
+    ctx.ui.setStatus("dcp", `vctx ~${formatTokens(status.projectedTokens)}${percent}`);
   } catch {
     // Footer status must never affect the request path.
   }
