@@ -12,6 +12,40 @@ import { AgentSession } from "@earendil-works/pi-coding-agent";
  * Pi's native compaction decisions never read getContextUsage() (verified in
  * agent-session.js _checkCompaction), it fails open, and it only overrides
  * when DCP genuinely applied summaries to the most recent request.
+ *
+ * ============================================================================
+ * MAINTENANCE CONTRACT - this is an UNSUPPORTED monkey-patch of Pi internals.
+ * Re-verify these assumptions whenever Pi ships a notable update:
+ *
+ * 1. `AgentSession` is still exported from `@earendil-works/pi-coding-agent`
+ *    (dist/index.js) AND the extension loader still aliases that package to
+ *    Pi's own running instance (dist/core/extensions/loader.js: `getAliases()`
+ *    for Node installs, `VIRTUAL_MODULES` for the compiled Bun binary). If the
+ *    loader ever gives extensions a *separate copy*, this patch applies to the
+ *    copy and silently does nothing.
+ * 2. `AgentSession.prototype.getContextUsage()` still exists with the shape
+ *    `{ tokens: number|null, contextWindow: number, percent: number|null }`
+ *    (dist/core/agent-session.js).
+ * 3. Pi's compaction/overflow decisions still do NOT call getContextUsage().
+ *    Check `_checkCompaction()` in agent-session.js: it must read assistant
+ *    `usage` / `estimateContextTokens(agent.state.messages)` directly. If a
+ *    future Pi starts making SAFETY decisions from getContextUsage(), this
+ *    patch must be REMOVED or gated to display-only call sites immediately.
+ *
+ * HOW BREAKAGE MANIFESTS: install() returns false (assumption 2 fails), or
+ * returns true but the footer shows raw numbers again (assumption 1 fails -
+ * patched a dead copy). Either way behavior degrades to stock Pi; nothing
+ * crashes. `/dcp status` surfaces which state we're in via
+ * `isVirtualContextUsageInstalled()` - if a user reports the footer
+ * over-reporting again, check that line first.
+ *
+ * HOW TO FIX WHEN IT BREAKS: re-run the verification greps against the
+ * installed Pi (`rg -n "getContextUsage" dist/core/agent-session.js`,
+ * `rg -n "getAliases|VIRTUAL_MODULES" dist/core/extensions/loader.js`), adapt
+ * the property name/shape below, or - if Pi ever exposes an official context
+ * display override - delete this file and use that instead. Prefer the
+ * official API the moment one exists.
+ * ============================================================================
  */
 
 export interface ProjectedUsage {
@@ -32,6 +66,11 @@ interface ContextUsageLike {
 }
 
 let installed = false;
+
+/** True when the live prototype patch took effect (see maintenance contract above). */
+export function isVirtualContextUsageInstalled(): boolean {
+  return installed;
+}
 
 export function wrapGetContextUsage(
   original: (this: unknown) => ContextUsageLike | undefined,

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1
+
+- Documented the maintenance contract for the context-display override (exact Pi internals it depends on, how breakage manifests, how to re-verify and fix).
+- Added CI canary tests that fail when a Pi update changes those internals, and a `/dcp status` line showing whether the override is active.
+
 ## 0.7.0
 
 - **Pi's own context percentage now reflects the request DCP actually sends.** When summaries are applied, the live `AgentSession.getContextUsage()` is patched (presentation-only, fail-open, never used by Pi's native compaction decisions) so the existing footer percentage stops over-reporting. No extra footer line.

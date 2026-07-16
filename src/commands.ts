@@ -5,6 +5,7 @@ import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
 import { rebuildVirtualBlocks, relieveContextPressure } from "./virtual-blocks.ts";
+import { isVirtualContextUsageInstalled } from "./context-magic.ts";
 
 export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
   pi.registerCommand("dcp", {
@@ -248,6 +249,10 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
     `pi-dcp: ${state.config.enabled ? "enabled" : "disabled"}`,
     `context: ${usage?.tokens?.toLocaleString() ?? "unknown"} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens`,
     ...(vctxLine ? [vctxLine] : []),
+    // Diagnostic for the unsupported footer-number override (see context-magic.ts
+    // maintenance contract). "raw" after a Pi update means the override no longer
+    // took hold and the footer shows unprojected numbers again.
+    `context display: ${isVirtualContextUsageInstalled() ? "projected when summaries apply" : "raw (override inactive; see context-magic.ts)"}`,
     `thresholds: ${pct !== null ? `${pct}%` : "—"} / ${abs !== null ? abs.toLocaleString() : "—"} → effective ${effective !== null ? effective.toLocaleString() : "none (defer to Pi)"}`,
     `compaction cooldown: ${state.config.triggers.endOfTurn.cooldownTurns} turn(s)`,
     `custom summary: ${state.config.compaction.customSummary ? "on" : "off"}`,

@@ -1,5 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { wrapGetContextUsage, type VirtualUsageRef } from "../src/context-magic.ts";
+import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { installVirtualContextUsage, isVirtualContextUsageInstalled, wrapGetContextUsage, type VirtualUsageRef } from "../src/context-magic.ts";
+
+// CANARY for the maintenance contract in src/context-magic.ts. If a Pi update
+// renames/removes getContextUsage or stops exporting AgentSession, these fail
+// in CI before a user ever sees the footer silently over-reporting again.
+describe("Pi internals the footer override depends on", () => {
+  it("AgentSession is still exported with a prototype getContextUsage()", () => {
+    expect(typeof AgentSession).toBe("function");
+    expect(typeof (AgentSession as any).prototype?.getContextUsage).toBe("function");
+  });
+
+  it("install succeeds against the real prototype and reports itself", () => {
+    expect(installVirtualContextUsage({})).toBe(true);
+    expect(isVirtualContextUsageInstalled()).toBe(true);
+  });
+});
 
 describe("virtual context usage patch", () => {
   const raw = { tokens: 360_000, contextWindow: 372_000, percent: (360_000 / 372_000) * 100 };
