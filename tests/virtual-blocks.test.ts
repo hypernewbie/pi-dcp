@@ -291,10 +291,47 @@ describe("virtual range compression", () => {
     expect(result.filter((message) => JSON.stringify(message).includes("second"))).toHaveLength(1);
   });
 
-  it("fails open when another transform changes the message list", () => {
+  it("applies verified blocks while retaining live messages other transforms injected", () => {
     const entries = [message("u1", "user", "first"), message("a1", "assistant", "done"), message("u2", "user", "current")];
     const raw = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    const changed = [...raw, { role: "user", content: [{ type: "text", text: "injected" }], timestamp: Date.now() } as AgentMessage];
-    expect(projectVirtualBlocks(changed, entries, [block("u1", "a1")])).toBe(changed);
+    const injected = { role: "user", content: [{ type: "text", text: "injected by another extension" }], timestamp: Date.now() } as AgentMessage;
+    const changed = [...raw, injected];
+    const result = projectVirtualBlocks(changed, entries, [block("u1", "a1")]);
+    expect(JSON.stringify(result[0])).toContain("completed phase summary");
+    expect(JSON.stringify(result)).toContain("injected by another extension");
+    expect(JSON.stringify(result)).toContain("current");
+    expect(result).toHaveLength(3);
+  });
+
+  it("still projects when live messages differ from stored copies in volatile metadata", () => {
+    const entries = [message("u1", "user", "first"), message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const raw = entries.map((entry) => ({ ...(entry as any).message, usage: { input: 5, output: 9, totalTokens: 14 }, timestamp: 999999 })) as AgentMessage[];
+    const result = projectVirtualBlocks(raw, entries, [block("u1", "a1")]);
+    expect(result).toHaveLength(2);
+    expect(JSON.stringify(result[0])).toContain("completed phase summary");
+  });
+
+  it("maps duplicate identical messages by chronological position, not first match", () => {
+    const entries = [message("u1", "user", "same text"), message("a1", "assistant", "done"), message("u2", "user", "same text"), message("a2", "assistant", "working")];
+    const raw = entries.map((entry) => (entry as any).message) as AgentMessage[];
+    const result = projectVirtualBlocks(raw, entries, [block("u2", "a2")]);
+    expect(result).toHaveLength(3);
+    // The first occurrence must survive; only the second turn is summarized.
+    expect(JSON.stringify(result[0])).toContain("same text");
+    expect(JSON.stringify(result[1])).toContain("done");
+    expect(JSON.stringify(result[2])).toContain("completed phase summary");
+  });
+
+  it("refuses a replacement that would orphan a live tool result outside the span", () => {
+    const entries = [
+      message("u1", "user", "first"),
+      { type: "message", id: "a1", parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "toolCall", id: "tc9", name: "read", arguments: { path: "x" } }], timestamp: Date.now() } } as unknown as SessionEntry,
+      message("u2", "user", "current"),
+    ];
+    const raw = entries.flatMap((entry) => entry.type === "message" ? [entry.message] : []);
+    // A live tool result exists that its stored entries do not cover.
+    const live = [...raw.slice(0, 2), { role: "toolResult", toolCallId: "tc9", content: [{ type: "text", text: "live result" }], timestamp: Date.now() } as AgentMessage, raw[2]];
+    const result = projectVirtualBlocks(live, entries, [block("u1", "a1")]);
+    expect(result).toBe(live);
   });
 });

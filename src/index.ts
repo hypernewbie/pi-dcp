@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
 import { loadConfig, loadPiCompactionSettings, validateThreshold } from "./config.ts";
 import { createTriggerState } from "./state.ts";
@@ -14,10 +15,10 @@ import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
 import { createCompactionPreview, buildCompactionReceiptText } from "./compaction-bar.ts";
 import type { DcpRunInfo } from "./compaction-bar.ts";
-import { notify, debug, setCompactingWorking } from "./ui.ts";
+import { notify, debug, setCompactingWorking, setProjectedContextStatus } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, retireVirtualBlock } from "./virtual-blocks.ts";
-import { projectVirtualBlocks } from "./context-projector.ts";
+import { projectVirtualBlocksWithInfo } from "./context-projector.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
 import type { CompactionInitiator } from "./types.ts";
 
@@ -282,11 +283,19 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       const branch = ctx.sessionManager.getBranch();
       state.virtualBlocks = rebuildVirtualBlocks(branch);
       const contextEntries = ctx.sessionManager.buildContextEntries();
-      messages = projectVirtualBlocks(event.messages, contextEntries, state.virtualBlocks);
-      if (messages === event.messages && state.virtualBlocks.length > 0) {
-        debug(ctx, state.config, "Context summary projection did not map this request; leaving raw context unchanged.");
+      const projection = projectVirtualBlocksWithInfo(event.messages, contextEntries, state.virtualBlocks);
+      messages = projection.messages;
+      const projectedTokens = messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+      setProjectedContextStatus(ctx, {
+        projectedTokens,
+        contextWindow: ctx.model?.contextWindow ?? 0,
+        appliedBlocks: projection.appliedBlocks,
+      });
+      if (projection.skippedBlocks > 0) {
+        notify(ctx, state.config, `${projection.skippedBlocks} stored context summar${projection.skippedBlocks === 1 ? "y" : "ies"} could not be applied to this request.`, "warning");
       }
     } catch (error) {
+      setProjectedContextStatus(ctx, undefined);
       debug(ctx, state.config, `Context summary projection failed open: ${error instanceof Error ? error.message : String(error)}`);
       // Projection is fail-open: request-only pruning may still run below.
     }
