@@ -271,16 +271,14 @@ describe("extension entry point", () => {
     const mockApi = makeMockApi(hooks, commands, entryRenderers) as any;
     mod.default(mockApi as any);
     const compact = vi.fn();
-    const workingMessages: Array<string | undefined> = [];
-    const workingVisible: boolean[] = [];
+    const widgets: Array<{ key: string; content: string[] | undefined }> = [];
     const ctx: any = {
       hasUI: true,
       cwd: process.cwd(),
       isProjectTrusted: () => true,
       ui: {
         notify: () => {},
-        setWorkingMessage: (message?: string) => workingMessages.push(message),
-        setWorkingVisible: (visible: boolean) => workingVisible.push(visible),
+        setWidget: (key: string, content: string[] | undefined) => widgets.push({ key, content }),
       },
       getContextUsage: () => ({ tokens: 500_000, contextWindow: 1_000_000 }),
       sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
@@ -292,9 +290,8 @@ describe("extension entry point", () => {
     for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
     for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
     expect(compact).not.toHaveBeenCalled();
-    expect(workingMessages).toContain("Compacting older completed work…");
-    expect(workingMessages).toContain(undefined);
-    expect(workingVisible).toEqual(expect.arrayContaining([true, false]));
+    expect(widgets.some((widget) => widget.content?.[0].includes("summarizing completed work"))).toBe(true);
+    expect(widgets.some((widget) => widget.key === "dcp-compacting" && widget.content === undefined)).toBe(true);
     await commands.find((command) => command.name === "dcp")?.handler?.("compact", ctx);
     expect(compact).not.toHaveBeenCalled();
   });

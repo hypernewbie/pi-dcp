@@ -64,17 +64,23 @@ export function appendVirtualBlockReceipt(
   const mode = block.rangeKind === "active-prefix" ? "active-prefix" : "completed phase";
   pi.appendEntry<{ text: string }>("dcp-receipt", {
     text: [
-      `▣ DCP COMPACT #${details.number} · ${mode}`,
+      `▣ DCP | -~${formatTokenCount(block.estimatedRawTokens)} removed, +~${formatTokenCount(block.estimatedBlockTokens)} summary`,
       "",
       bar,
+      `▣ Compression #${details.number} -~${formatTokenCount(block.estimatedRawTokens)} removed, +~${formatTokenCount(block.estimatedBlockTokens)} summary`,
+      `→ Range: ${block.startEntryId}..${block.endEntryId} · ${mode}`,
+      `→ Items: ${block.messagesCompressed} messages and ${block.toolsCompressed} tool calls compressed`,
+      `→ User prompts preserved: ${block.preservedUserMessages.length}; exact evidence: ~${formatTokenCount(estimateTextTokens(block.exactEvidence))}`,
+      `→ Raw working set retained: ~${formatTokenCount(rawWorkingSet)}`,
       `░ summarized completed work · █ raw working set retained`,
-      `→ Range: ${block.startEntryId}..${block.endEntryId}`,
-      `→ Raw replaced: ~${block.estimatedRawTokens.toLocaleString()} tokens; summary: ~${block.estimatedBlockTokens.toLocaleString()} tokens`,
-      `→ Items: ${block.messagesCompressed} messages and ${block.toolsCompressed} tool calls`,
-      `→ User prompts preserved: ${block.preservedUserMessages.length}; exact evidence: ~${estimateTextTokens(block.exactEvidence).toLocaleString()} tokens`,
-      `→ Raw working set retained: ~${rawWorkingSet.toLocaleString()} tokens`,
     ].join("\n"),
   });
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `${tokens}`;
 }
 
 function renderRangeBar(summarizedTokens: number, retainedTokens: number, width = 42): string {

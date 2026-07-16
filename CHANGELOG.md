@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.2
+
+- Fixed the compacting indicator: it now uses a temporary above-editor card that Pi renders even after the agent leaves streaming mode.
+- Updated range-compression receipts to use the OpenCode-style header, ASCII bar, compression line, item counts, range, evidence, and retained-context details.
+
 ## 0.5.1
 
 - Added a temporary `Compacting older completed work…` working indicator while `/dcp compact` prepares a summary.

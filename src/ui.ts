@@ -14,22 +14,23 @@ export function notify(ctx: ExtensionContext, config: DcpConfig, message: string
 }
 
 /**
- * Temporary working-row status for a range summary call. This is deliberately
- * not a footer/statusline or persisted entry: it exists only while the model
- * is producing the replacement summary.
+ * A temporary, visible compacting card. The normal working spinner cannot be
+ * shown at turn_end because Pi has already marked the agent non-streaming by
+ * then. A widget renders independently of streaming and is removed on finish;
+ * it is not a footer, statusline, or persisted transcript entry.
  */
 export function setCompactingWorking(ctx: ExtensionContext, active: boolean): void {
   const ui = ctx.ui as ExtensionContext["ui"] & {
-    setWorkingMessage?: (message?: string) => void;
-    setWorkingVisible?: (visible: boolean) => void;
+    setWidget?: (key: string, content: string[] | undefined, options?: { placement?: "aboveEditor" | "belowEditor" }) => void;
   };
   try {
     if (active) {
-      ui.setWorkingMessage?.("Compacting older completed work…");
-      ui.setWorkingVisible?.(true);
+      ui.setWidget?.("dcp-compacting", [
+        "▣ DCP COMPACT · summarizing completed work…",
+        "│░░░░░░░░░░░░░░░░░░░░░░░░████████████████│",
+      ], { placement: "aboveEditor" });
     } else {
-      ui.setWorkingMessage?.();
-      ui.setWorkingVisible?.(false);
+      ui.setWidget?.("dcp-compacting", undefined);
     }
   } catch {
     // UI status must never affect compression.
