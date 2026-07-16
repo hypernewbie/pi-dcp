@@ -13,6 +13,29 @@ export function notify(ctx: ExtensionContext, config: DcpConfig, message: string
   }
 }
 
+/**
+ * Temporary working-row status for a range summary call. This is deliberately
+ * not a footer/statusline or persisted entry: it exists only while the model
+ * is producing the replacement summary.
+ */
+export function setCompactingWorking(ctx: ExtensionContext, active: boolean): void {
+  const ui = ctx.ui as ExtensionContext["ui"] & {
+    setWorkingMessage?: (message?: string) => void;
+    setWorkingVisible?: (visible: boolean) => void;
+  };
+  try {
+    if (active) {
+      ui.setWorkingMessage?.("Compacting older completed work…");
+      ui.setWorkingVisible?.(true);
+    } else {
+      ui.setWorkingMessage?.();
+      ui.setWorkingVisible?.(false);
+    }
+  } catch {
+    // UI status must never affect compression.
+  }
+}
+
 export function debug(ctx: ExtensionContext, config: DcpConfig, message: string): void {
   if (!config.debug) return;
   if (ctx.hasUI) {

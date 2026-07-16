@@ -1,7 +1,7 @@
 import type { ExtensionCommandContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveEffectiveThreshold } from "./config.ts";
 import { triggerCompaction, resetTriggerState } from "./triggers.ts";
-import { notify } from "./ui.ts";
+import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks } from "./virtual-blocks.ts";
@@ -68,6 +68,7 @@ async function handleVirtualCompact(
   }
   if (state.triggerState.isCompacting) return;
   state.triggerState.isCompacting = true;
+  setCompactingWorking(ctx, true);
   try {
     state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
     const block = await createVirtualBlock(
@@ -95,6 +96,7 @@ async function handleVirtualCompact(
     state.triggerState.tokensAtLastCompaction = ctx.getContextUsage()?.tokens ?? null;
     notify(ctx, state.config, `Compacted completed work (~${block.estimatedRawTokens.toLocaleString()} tokens).`, "info");
   } finally {
+    setCompactingWorking(ctx, false);
     state.triggerState.isCompacting = false;
   }
 }

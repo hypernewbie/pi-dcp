@@ -13,7 +13,7 @@ import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
 import { createCompactionPreview, buildCompactionReceiptText } from "./compaction-bar.ts";
 import type { DcpRunInfo } from "./compaction-bar.ts";
-import { notify, debug } from "./ui.ts";
+import { notify, debug, setCompactingWorking } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, retireVirtualBlock } from "./virtual-blocks.ts";
 import { projectVirtualBlocks } from "./context-projector.ts";
@@ -112,6 +112,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     if (state.triggerState.isCompacting) return;
 
     state.triggerState.isCompacting = true;
+    setCompactingWorking(ctx, true);
     try {
       state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
       const block = await createVirtualBlock(
@@ -136,6 +137,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       state.triggerState.tokensAtLastCompaction = usage.tokens;
       debug(ctx, state.config, `Compacted completed work (~${block.estimatedRawTokens.toLocaleString()} tokens)`);
     } finally {
+      setCompactingWorking(ctx, false);
       state.triggerState.isCompacting = false;
     }
   });

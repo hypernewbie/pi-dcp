@@ -93,10 +93,14 @@ export interface VirtualCompressionBlock {
   startEntryId: string;
   endEntryId: string;
   anchorEntryId: string;
+  rangeKind: "historical" | "active-prefix";
+  messagesCompressed: number;
+  toolsCompressed: number;
   summary: string;
   exactEvidence: string;
   preservedUserMessages: string[];
   estimatedRawTokens: number;
+  retainedRawTokens: number;
   estimatedBlockTokens: number;
   active: boolean;
   createdAt: number;

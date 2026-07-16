@@ -12,6 +12,7 @@ export interface VirtualRange {
   messages: AgentMessage[];
   /** The current request and raw suffix that must remain available to the model. */
   retainedMessages: AgentMessage[];
+  retainedRawTokens: number;
   estimatedRawTokens: number;
 }
 
@@ -103,6 +104,7 @@ export function selectCompressibleRange(
     entries: prefix,
     messages: prefix.flatMap((entry) => sessionEntryToContextMessages(entry)),
     retainedMessages: [...currentRequest, ...activeEntries.slice(prefixEnd + 1).flatMap((entry) => sessionEntryToContextMessages(entry))],
+    retainedRawTokens: currentRequest.reduce((sum, message) => sum + estimateMessageTokens(message), 0) + (activeTokens - prefixTokens),
     estimatedRawTokens: prefixTokens,
   };
 }
@@ -114,13 +116,15 @@ function makeRange(
   endIndex: number,
   estimatedRawTokens: number,
 ): VirtualRange {
+  const retainedMessages = entries.slice(endIndex + 1).flatMap((entry) => sessionEntryToContextMessages(entry));
   return {
     kind: "historical",
     startEntryId: entries[startIndex].id,
     endEntryId: entries[endIndex].id,
     entries: selected,
     messages: selected.flatMap((entry) => sessionEntryToContextMessages(entry)),
-    retainedMessages: [],
+    retainedMessages,
+    retainedRawTokens: retainedMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0),
     estimatedRawTokens,
   };
 }

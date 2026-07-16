@@ -28,10 +28,14 @@ function block(startEntryId: string, endEntryId: string): VirtualCompressionBloc
     startEntryId,
     endEntryId,
     anchorEntryId: startEntryId,
+    rangeKind: "historical",
+    messagesCompressed: 2,
+    toolsCompressed: 0,
     summary: "completed phase summary",
     exactEvidence: "",
     preservedUserMessages: [],
     estimatedRawTokens: 10,
+    retainedRawTokens: 35,
     estimatedBlockTokens: 3,
     active: true,
     createdAt: Date.now(),
@@ -74,6 +78,18 @@ describe("virtual range compression", () => {
     expect(completeSimpleMock).not.toHaveBeenCalled();
   });
 
+  it("uses the range summary contract instead of a generic prose prompt", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "brief" }] });
+    const entries = [message("u1", "user", "x".repeat(10_000)), message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
+    const prompt = completeSimpleMock.mock.calls[0][1].messages[0].content[0].text;
+    expect(prompt).toContain("### Goal");
+    expect(prompt).toContain("### Constraints & Preferences");
+    expect(prompt).toContain("### Progress");
+    expect(prompt).toContain("### Technical Record");
+  });
+
   it("uses the active-prefix prompt and keeps the current request as retained context", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "brief prefix" }] });
     const entries = [
@@ -88,8 +104,9 @@ describe("virtual range compression", () => {
     const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any);
     expect(result?.startEntryId).toBe("a1");
     const prompt = completeSimpleMock.mock.calls[0][1].messages[0].content[0].text;
-    expect(prompt).toContain("CURRENT active coding task");
+    expect(prompt).toContain("EARLY PREFIX of an active task");
     expect(prompt).toContain("current request must stay raw");
+    expect(prompt).toContain("### Technical Record");
   });
 
   it("uses compaction.summaryModel for range summaries when configured", async () => {
@@ -251,6 +268,7 @@ describe("virtual range compression", () => {
     appendVirtualBlockReceipt(pi, item, { number: 1, activeWorkingSetTokens: 35_000 });
     expect(appended[0][0]).toBe("dcp-context-range.v1");
     expect(appended[1][0]).toBe("dcp-receipt");
+    expect(JSON.stringify(appended[1][1])).toContain("░ summarized completed work");
     expect(JSON.stringify(appended[1][1])).not.toMatch(/PLAN3|virtual block|legacy/i);
   });
 

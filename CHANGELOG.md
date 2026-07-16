@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- Added a temporary `Compacting older completed work…` working indicator while `/dcp compact` prepares a summary.
+- Replaced the generic range prompt with a structured technical summary contract for completed work and active-task prefixes.
+- Expanded the compact receipt with an ASCII context breakdown, range, item counts, exact-evidence size, and raw-context retained size.
+- Fixed active-prefix selection to keep the current user request raw; strengthened overlap, tool-pair, model-limit, and no-growth safeguards.
+
 ## 0.5.0
 
 - Added automatic context relief that folds completed work into bounded summaries without interrupting the running task.

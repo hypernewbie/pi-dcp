@@ -19,6 +19,7 @@ import type {
 import { estimateTextTokens } from "./utils.ts";
 import { buildProtectedAppendix } from "./compaction/protected-appendix.ts";
 import { appendPreservedUserMessages, collectRealUserMessages } from "./compaction/user-prompts.ts";
+import { renderRangeSummaryPrompt } from "./compaction/range-prompt.ts";
 
 export const DCP_BLOCK_CUSTOM_TYPE = "dcp-context-range.v1";
 export const DCP_BLOCK_RETIRED_TYPE = "dcp-context-range-retired.v1";
@@ -58,15 +59,29 @@ export function appendVirtualBlockReceipt(
   block: VirtualCompressionBlock,
   details: { number: number; activeWorkingSetTokens: number },
 ): void {
+  const rawWorkingSet = Math.max(0, block.retainedRawTokens || details.activeWorkingSetTokens);
+  const bar = renderRangeBar(block.estimatedRawTokens, rawWorkingSet);
+  const mode = block.rangeKind === "active-prefix" ? "active-prefix" : "completed phase";
   pi.appendEntry<{ text: string }>("dcp-receipt", {
     text: [
-      `▣ DCP COMPACT #${details.number}`,
+      `▣ DCP COMPACT #${details.number} · ${mode}`,
+      "",
+      bar,
+      `░ summarized completed work · █ raw working set retained`,
       `→ Range: ${block.startEntryId}..${block.endEntryId}`,
       `→ Raw replaced: ~${block.estimatedRawTokens.toLocaleString()} tokens; summary: ~${block.estimatedBlockTokens.toLocaleString()} tokens`,
+      `→ Items: ${block.messagesCompressed} messages and ${block.toolsCompressed} tool calls`,
       `→ User prompts preserved: ${block.preservedUserMessages.length}; exact evidence: ~${estimateTextTokens(block.exactEvidence).toLocaleString()} tokens`,
-      `→ Raw working set retained: ~${details.activeWorkingSetTokens.toLocaleString()} tokens`,
+      `→ Raw working set retained: ~${rawWorkingSet.toLocaleString()} tokens`,
     ].join("\n"),
   });
+}
+
+function renderRangeBar(summarizedTokens: number, retainedTokens: number, width = 42): string {
+  const total = summarizedTokens + retainedTokens;
+  if (total <= 0) return `│${"░".repeat(width)}│`;
+  const summarizedWidth = Math.max(1, Math.min(width - 1, Math.round((summarizedTokens / total) * width)));
+  return `│${"░".repeat(summarizedWidth)}${"█".repeat(width - summarizedWidth)}│`;
 }
 
 export function retireVirtualBlock(pi: ExtensionAPI, blockId: string): void {
@@ -119,22 +134,15 @@ export async function createVirtualBlock(
     maxProtectedTokens: config.contextRelief.exactEvidenceTokens,
   }, protection);
   const evidence = selectExactEvidence(range.messages, protectedResult.text, config.contextRelief.exactEvidenceTokens);
-  const userPrompt = range.kind === "active-prefix"
-    ? [
-      "Summarize an early prefix of the CURRENT active coding task. The current user request and newer work remain raw after this prefix.",
-      "Identify the active user request; record completed actions; retain exact unresolved errors; and explain what the raw retained suffix depends on. Do not continue the task. Do not invent facts.",
-      focus ? `Focus: ${focus}` : "",
-      "\n## Prefix to summarize\n" + conversationText,
-      "\n## Raw context retained after this prefix\n" + serializeConversation(convertToLlm(range.retainedMessages)),
-      evidence ? "\n## Exact evidence\n" + evidence : "",
-    ].filter(Boolean).join("\n\n")
-    : [
-      "Summarize this completed historical work phase for a coding agent.",
-      "Do not continue the task or invent facts. Preserve decisions, changes, unresolved issues, and dependencies needed by later work.",
-      focus ? `Focus: ${focus}` : "",
-      "\n## Range\n" + conversationText,
-      evidence ? "\n## Exact evidence\n" + evidence : "",
-    ].filter(Boolean).join("\n\n");
+  const { systemPrompt, userPrompt } = renderRangeSummaryPrompt({
+    kind: range.kind,
+    conversationText,
+    retainedContext: range.kind === "active-prefix"
+      ? serializeConversation(convertToLlm(range.retainedMessages))
+      : undefined,
+    exactEvidence: evidence || undefined,
+    focus,
+  });
   const reasoning = model.reasoning && thinkingLevel !== "off" ? thinkingLevel : undefined;
   if (typeof model.contextWindow === "number" && model.contextWindow > 0 &&
       estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) return undefined;
@@ -143,7 +151,7 @@ export async function createVirtualBlock(
     const response = await completeSimple(
       model,
       {
-        systemPrompt: "You summarize one completed range of a coding-agent session. Output only a concise factual summary.",
+        systemPrompt,
         messages: [{ role: "user", content: [{ type: "text", text: userPrompt }], timestamp: Date.now() }],
       },
       {
@@ -169,16 +177,21 @@ export async function createVirtualBlock(
     // A summary that is not smaller cannot provide context relief. Leave the
     // raw range intact and let later growth produce a better candidate.
     if (estimatedBlockTokens >= range.estimatedRawTokens) return undefined;
+    const items = countRangeItems(range.messages);
     return {
       version: 1,
       id: `dcp-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       startEntryId: range.startEntryId,
       endEntryId: range.endEntryId,
       anchorEntryId: range.startEntryId,
+      rangeKind: range.kind,
+      messagesCompressed: items.messages,
+      toolsCompressed: items.tools,
       summary: full,
       exactEvidence: evidence,
       preservedUserMessages: preserved,
       estimatedRawTokens: range.estimatedRawTokens,
+      retainedRawTokens: range.retainedRawTokens,
       estimatedBlockTokens,
       active: true,
       createdAt: Date.now(),
@@ -211,6 +224,18 @@ function extractMessageText(content: unknown): string {
     .filter((part) => !!part && typeof part === "object" && (part as { type?: unknown }).type === "text")
     .map((part) => String((part as { text?: unknown }).text ?? ""))
     .join("\n");
+}
+
+function countRangeItems(messages: AgentMessage[]): { messages: number; tools: number } {
+  let messagesCompressed = 0;
+  let toolsCompressed = 0;
+  for (const message of messages) {
+    if (message.role === "user" || message.role === "assistant") messagesCompressed++;
+    if (message.role === "assistant") {
+      for (const part of message.content) if (part.type === "toolCall") toolsCompressed++;
+    }
+  }
+  return { messages: messagesCompressed, tools: toolsCompressed };
 }
 
 function resolveModelBySpec(ctx: ExtensionContext, spec: string) {

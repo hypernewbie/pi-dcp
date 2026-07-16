@@ -242,7 +242,7 @@ describe("extension entry point", () => {
     const branch: any[] = [
       oldMessage("u1", "user", "old request"),
       oldMessage("a1", "assistant", "old result"),
-      { type: "custom", id: "b1", parentId: "a1", timestamp: new Date().toISOString(), customType: "dcp-context-range.v1", data: { version: 1, block: { version: 1, id: "block-1", startEntryId: "u1", endEntryId: "a1", anchorEntryId: "u1", summary: "old phase preserved", exactEvidence: "", preservedUserMessages: ["old request"], estimatedRawTokens: 20, estimatedBlockTokens: 4, active: true, createdAt: Date.now() } } },
+      { type: "custom", id: "b1", parentId: "a1", timestamp: new Date().toISOString(), customType: "dcp-context-range.v1", data: { version: 1, block: { version: 1, id: "block-1", startEntryId: "u1", endEntryId: "a1", anchorEntryId: "u1", rangeKind: "historical", messagesCompressed: 2, toolsCompressed: 0, summary: "old phase preserved", exactEvidence: "", preservedUserMessages: ["old request"], estimatedRawTokens: 20, retainedRawTokens: 30, estimatedBlockTokens: 4, active: true, createdAt: Date.now() } } },
       oldMessage("u2", "user", "active request"),
     ];
     const mockApi = makeMockApi(hooks, commands, entryRenderers);
@@ -271,11 +271,17 @@ describe("extension entry point", () => {
     const mockApi = makeMockApi(hooks, commands, entryRenderers) as any;
     mod.default(mockApi as any);
     const compact = vi.fn();
+    const workingMessages: Array<string | undefined> = [];
+    const workingVisible: boolean[] = [];
     const ctx: any = {
-      hasUI: false,
+      hasUI: true,
       cwd: process.cwd(),
       isProjectTrusted: () => true,
-      ui: { notify: () => {} },
+      ui: {
+        notify: () => {},
+        setWorkingMessage: (message?: string) => workingMessages.push(message),
+        setWorkingVisible: (visible: boolean) => workingVisible.push(visible),
+      },
       getContextUsage: () => ({ tokens: 500_000, contextWindow: 1_000_000 }),
       sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
       model: undefined,
@@ -284,7 +290,11 @@ describe("extension entry point", () => {
     };
     for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
     for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
     expect(compact).not.toHaveBeenCalled();
+    expect(workingMessages).toContain("Compacting older completed work…");
+    expect(workingMessages).toContain(undefined);
+    expect(workingVisible).toEqual(expect.arrayContaining([true, false]));
     await commands.find((command) => command.name === "dcp")?.handler?.("compact", ctx);
     expect(compact).not.toHaveBeenCalled();
   });
