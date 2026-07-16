@@ -236,9 +236,15 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
   const pct = state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent;
   const abs = state.config.triggers.endOfTurn.tokenThresholdAbsolute;
 
+  const projection = state.lastProjection;
+  const vctxLine = projection && projection.appliedBlocks > 0
+    ? `vctx (actual sent): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · ${projection.appliedBlocks} summar${projection.appliedBlocks === 1 ? "y" : "ies"} applied`
+    : undefined;
+
   const lines = [
     `pi-dcp: ${state.config.enabled ? "enabled" : "disabled"}`,
     `context: ${usage?.tokens?.toLocaleString() ?? "unknown"} / ${usage?.contextWindow.toLocaleString() ?? "unknown"} tokens`,
+    ...(vctxLine ? [vctxLine] : []),
     `thresholds: ${pct !== null ? `${pct}%` : "—"} / ${abs !== null ? abs.toLocaleString() : "—"} → effective ${effective !== null ? effective.toLocaleString() : "none (defer to Pi)"}`,
     `compaction cooldown: ${state.config.triggers.endOfTurn.cooldownTurns} turn(s)`,
     `custom summary: ${state.config.compaction.customSummary ? "on" : "off"}`,

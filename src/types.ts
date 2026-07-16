@@ -178,6 +178,14 @@ export interface RuntimeState {
   triggerState: TriggerState;
   protection: ResolvedProtection;
   virtualBlocks: VirtualCompressionBlock[];
+  /** Facts about the most recent provider request DCP projected (for /dcp status). */
+  lastProjection?: {
+    projectedTokens: number;
+    contextWindow: number;
+    appliedBlocks: number;
+    skippedBlocks: number;
+    timestamp: number;
+  };
   compactionPreview?: CompactionPreview;
   stats?: StatsState;
 }

@@ -15,7 +15,7 @@ import { resolveProtection } from "./protection.ts";
 import { pruneContext } from "./context-pruner.ts";
 import { createCompactionPreview, buildCompactionReceiptText } from "./compaction-bar.ts";
 import type { DcpRunInfo } from "./compaction-bar.ts";
-import { notify, debug, setCompactingWorking, setProjectedContextStatus } from "./ui.ts";
+import { notify, debug, setCompactingWorking } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, retireVirtualBlock } from "./virtual-blocks.ts";
 import { projectVirtualBlocksWithInfo } from "./context-projector.ts";
@@ -286,16 +286,18 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       const projection = projectVirtualBlocksWithInfo(event.messages, contextEntries, state.virtualBlocks);
       messages = projection.messages;
       const projectedTokens = messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-      setProjectedContextStatus(ctx, {
+      state.lastProjection = {
         projectedTokens,
         contextWindow: ctx.model?.contextWindow ?? 0,
         appliedBlocks: projection.appliedBlocks,
-      });
+        skippedBlocks: projection.skippedBlocks,
+        timestamp: Date.now(),
+      };
       if (projection.skippedBlocks > 0) {
         notify(ctx, state.config, `${projection.skippedBlocks} stored context summar${projection.skippedBlocks === 1 ? "y" : "ies"} could not be applied to this request.`, "warning");
       }
     } catch (error) {
-      setProjectedContextStatus(ctx, undefined);
+      state.lastProjection = undefined;
       debug(ctx, state.config, `Context summary projection failed open: ${error instanceof Error ? error.message : String(error)}`);
       // Projection is fail-open: request-only pruning may still run below.
     }

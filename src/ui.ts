@@ -37,36 +37,6 @@ export function setCompactingWorking(ctx: ExtensionContext, active: boolean): vo
   }
 }
 
-/**
- * Footer status requested explicitly by the user: shows the estimated size of
- * the context DCP actually sent, next to Pi's own raw percentage. Cleared when
- * no summaries are applied so it never claims compression that did not happen.
- */
-export function setProjectedContextStatus(
-  ctx: ExtensionContext,
-  status: { projectedTokens: number; contextWindow: number; appliedBlocks: number } | undefined,
-): void {
-  try {
-    if (!ctx.hasUI) return;
-    if (!status || status.appliedBlocks === 0) {
-      ctx.ui.setStatus("dcp", undefined);
-      return;
-    }
-    const percent = status.contextWindow > 0
-      ? ` (${Math.round((status.projectedTokens / status.contextWindow) * 100)}%)`
-      : "";
-    ctx.ui.setStatus("dcp", `vctx ~${formatTokens(status.projectedTokens)}${percent}`);
-  } catch {
-    // Footer status must never affect the request path.
-  }
-}
-
-function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
-  return `${tokens}`;
-}
-
 export function debug(ctx: ExtensionContext, config: DcpConfig, message: string): void {
   if (!config.debug) return;
   if (ctx.hasUI) {

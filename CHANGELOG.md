@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.3
+
+- Removed the footer status line: Pi renders extension statuses on an extra footer row, which costs a terminal line. The actual-sent context size (`vctx`) is now shown on demand in `/dcp status` instead.
+
 ## 0.6.2
 
 - Renamed the footer status to `vctx` (virtual context) for clarity.
