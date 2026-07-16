@@ -94,6 +94,45 @@ export function retireVirtualBlock(pi: ExtensionAPI, blockId: string): void {
   pi.appendEntry(DCP_BLOCK_RETIRED_TYPE, { version: 1, blockId });
 }
 
+const MAX_BLOCKS_PER_RELIEF = 6;
+
+/**
+ * Create as many bounded summaries as needed to free approximately
+ * `freeTargetTokens`, one range at a time. A single range is capped by
+ * maxChunkInputTokens, so real pressure (e.g. 300K over threshold) requires
+ * several blocks in one pass rather than one under-sized fold.
+ */
+export async function relieveContextPressure(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  config: DcpConfig,
+  protection: ResolvedProtection,
+  blocks: VirtualCompressionBlock[],
+  focus: string | undefined,
+  thinkingLevel: ThinkingLevel,
+  freeTargetTokens: number,
+  showReceipts: boolean,
+): Promise<{ created: VirtualCompressionBlock[]; freedTokens: number }> {
+  const created: VirtualCompressionBlock[] = [];
+  let freedTokens = 0;
+  for (let i = 0; i < MAX_BLOCKS_PER_RELIEF; i++) {
+    if (created.length > 0 && freedTokens >= freeTargetTokens) break;
+    const block = await createVirtualBlock(pi, ctx, config, protection, blocks, focus, thinkingLevel);
+    if (!block) break;
+    appendVirtualBlock(pi, block);
+    if (showReceipts) {
+      appendVirtualBlockReceipt(pi, block, {
+        number: blocks.length + 1,
+        activeWorkingSetTokens: config.contextRelief.activeWorkingSetTokens,
+      });
+    }
+    blocks.push(block);
+    created.push(block);
+    freedTokens += Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
+  }
+  return { created, freedTokens };
+}
+
 export async function createVirtualBlock(
   pi: ExtensionAPI,
   ctx: ExtensionContext,

@@ -4,7 +4,7 @@ import { triggerCompaction, resetTriggerState } from "./triggers.ts";
 import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
-import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks } from "./virtual-blocks.ts";
+import { rebuildVirtualBlocks, relieveContextPressure } from "./virtual-blocks.ts";
 
 export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
   pi.registerCommand("dcp", {
@@ -71,7 +71,16 @@ async function handleVirtualCompact(
   setCompactingWorking(ctx, true);
   try {
     state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
-    const block = await createVirtualBlock(
+    const usage = ctx.getContextUsage();
+    const threshold = resolveEffectiveThreshold(
+      state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
+      state.config.triggers.endOfTurn.tokenThresholdAbsolute,
+      usage?.contextWindow ?? 0,
+    );
+    const freeTarget = usage?.tokens != null && threshold !== null
+      ? Math.max(0, usage.tokens - threshold) + state.config.contextRelief.targetHeadroomTokens
+      : state.config.contextRelief.targetHeadroomTokens;
+    const relief = await relieveContextPressure(
       pi,
       ctx,
       state.config,
@@ -79,22 +88,16 @@ async function handleVirtualCompact(
       state.virtualBlocks,
       args.trim() || undefined,
       pi.getThinkingLevel(),
+      freeTarget,
+      state.config.notification !== "off",
     );
-    if (!block) {
+    if (relief.created.length === 0) {
       notify(ctx, state.config, "No completed work was available to compact.", "info");
       return;
     }
-    appendVirtualBlock(pi, block);
-    if (state.config.notification !== "off") {
-      appendVirtualBlockReceipt(pi, block, {
-        number: state.virtualBlocks.length + 1,
-        activeWorkingSetTokens: state.config.contextRelief.activeWorkingSetTokens,
-      });
-    }
-    state.virtualBlocks.push(block);
     state.triggerState.turnsSinceCompaction = 0;
     state.triggerState.tokensAtLastCompaction = ctx.getContextUsage()?.tokens ?? null;
-    notify(ctx, state.config, `Compacted completed work (~${block.estimatedRawTokens.toLocaleString()} tokens).`, "info");
+    notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
   } finally {
     setCompactingWorking(ctx, false);
     state.triggerState.isCompacting = false;

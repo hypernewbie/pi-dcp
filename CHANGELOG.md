@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- **Pi's own context percentage now reflects the request DCP actually sends.** When summaries are applied, the live `AgentSession.getContextUsage()` is patched (presentation-only, fail-open, never used by Pi's native compaction decisions) so the existing footer percentage stops over-reporting. No extra footer line.
+- **Context relief now frees enough in one pass.** Instead of folding a single bounded range (e.g. ~58K against 300K of pressure), automatic and manual compaction create consecutive bounded summaries until usage is back under the trigger plus the configured headroom.
+- **Fixed noisy/incorrect "summary could not be applied" warnings.** Benign supersedes (a newer summary covering an older one) no longer warn; genuine stale-range failures warn once per summary instead of every request.
+
 ## 0.6.3
 
 - Removed the footer status line: Pi renders extension statuses on an extra footer row, which costs a terminal line. The actual-sent context size (`vctx`) is now shown on demand in `/dcp status` instead.

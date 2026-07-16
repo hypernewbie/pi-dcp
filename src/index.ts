@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { loadConfig, loadPiCompactionSettings, validateThreshold } from "./config.ts";
+import { loadConfig, loadPiCompactionSettings, resolveEffectiveThreshold, validateThreshold } from "./config.ts";
 import { createTriggerState } from "./state.ts";
 import {
   shouldTriggerCompaction,
@@ -17,7 +17,8 @@ import { createCompactionPreview, buildCompactionReceiptText } from "./compactio
 import type { DcpRunInfo } from "./compaction-bar.ts";
 import { notify, debug, setCompactingWorking } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
-import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, retireVirtualBlock } from "./virtual-blocks.ts";
+import { rebuildVirtualBlocks, relieveContextPressure, retireVirtualBlock } from "./virtual-blocks.ts";
+import { installVirtualContextUsage, type VirtualUsageRef } from "./context-magic.ts";
 import { projectVirtualBlocksWithInfo } from "./context-projector.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
 import type { CompactionInitiator } from "./types.ts";
@@ -37,6 +38,11 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     stats: createEmptyStats(),
     virtualBlocks: [],
   };
+  // Shared with the live getContextUsage patch so Pi's own footer percentage
+  // reflects the projected request instead of the raw session estimate.
+  const projectionRef: VirtualUsageRef = {};
+  const warnedBlockIds = new Set<string>();
+  installVirtualContextUsage(projectionRef);
 
   registerCommands(pi, state);
   registerSessionReaderTool(pi);
@@ -68,6 +74,9 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     );
     resetTriggerState(state.triggerState);
     state.compactionPreview = undefined;
+    state.lastProjection = undefined;
+    projectionRef.current = undefined;
+    warnedBlockIds.clear();
 
     // Rebuild stats from current branch custom entries
     try {
@@ -118,7 +127,15 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     setCompactingWorking(ctx, true);
     try {
       state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
-      const block = await createVirtualBlock(
+      // Free enough to get back under the trigger plus the configured headroom,
+      // not just one range: real pressure usually needs several bounded folds.
+      const threshold = resolveEffectiveThreshold(
+        state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
+        state.config.triggers.endOfTurn.tokenThresholdAbsolute,
+        usage.contextWindow,
+      );
+      const freeTarget = Math.max(0, usage.tokens - (threshold ?? usage.tokens)) + state.config.contextRelief.targetHeadroomTokens;
+      const relief = await relieveContextPressure(
         pi,
         ctx,
         state.config,
@@ -126,19 +143,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         state.virtualBlocks,
         undefined,
         pi.getThinkingLevel(),
+        freeTarget,
+        state.config.notification !== "off",
       );
-      if (!block) return;
-      appendVirtualBlock(pi, block);
-      if (state.config.notification !== "off") {
-        appendVirtualBlockReceipt(pi, block, {
-          number: state.virtualBlocks.length + 1,
-          activeWorkingSetTokens: state.config.contextRelief.activeWorkingSetTokens,
-        });
-      }
-      state.virtualBlocks.push(block);
+      if (relief.created.length === 0) return;
       state.triggerState.turnsSinceCompaction = 0;
       state.triggerState.tokensAtLastCompaction = usage.tokens;
-      debug(ctx, state.config, `Compacted completed work (~${block.estimatedRawTokens.toLocaleString()} tokens)`);
+      debug(ctx, state.config, `Compacted ${relief.created.length} range(s), ~${relief.freedTokens.toLocaleString()} tokens freed`);
     } finally {
       setCompactingWorking(ctx, false);
       state.triggerState.isCompacting = false;
@@ -272,11 +283,19 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     } catch {
       // Keep state unchanged if the host is in the middle of rebuilding its branch.
     }
+
+    // Raw history changed shape; the previous projection no longer describes it.
+    state.lastProjection = undefined;
+    projectionRef.current = undefined;
   });
 
   // Project durable summaries first, then apply optional request-only pruning.
   pi.on("context", (event, ctx) => {
-    if (!state.config.enabled) return undefined;
+    if (!state.config.enabled) {
+      projectionRef.current = undefined;
+      state.lastProjection = undefined;
+      return undefined;
+    }
 
     let messages = event.messages;
     try {
@@ -290,14 +309,21 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         projectedTokens,
         contextWindow: ctx.model?.contextWindow ?? 0,
         appliedBlocks: projection.appliedBlocks,
-        skippedBlocks: projection.skippedBlocks,
         timestamp: Date.now(),
       };
-      if (projection.skippedBlocks > 0) {
-        notify(ctx, state.config, `${projection.skippedBlocks} stored context summar${projection.skippedBlocks === 1 ? "y" : "ies"} could not be applied to this request.`, "warning");
+      projectionRef.current = state.lastProjection;
+      // A superseded overlap is normal (a newer summary replaced an older one).
+      // Only genuine per-block failures warrant a warning, and only once each.
+      const newFailures = projection.failedBlockIds.filter((id) => !warnedBlockIds.has(id));
+      if (newFailures.length > 0) {
+        for (const id of newFailures) warnedBlockIds.add(id);
+        notify(ctx, state.config, `${newFailures.length} stored context summar${newFailures.length === 1 ? "y" : "ies"} no longer match${newFailures.length === 1 ? "es" : ""} this session's history; the original raw messages were sent instead.`, "warning");
+      } else if (projection.failedBlockIds.length > 0) {
+        debug(ctx, state.config, `${projection.failedBlockIds.length} known-stale summaries skipped`);
       }
     } catch (error) {
       state.lastProjection = undefined;
+      projectionRef.current = undefined;
       debug(ctx, state.config, `Context summary projection failed open: ${error instanceof Error ? error.message : String(error)}`);
       // Projection is fail-open: request-only pruning may still run below.
     }

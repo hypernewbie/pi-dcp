@@ -13,7 +13,10 @@ interface Segment {
 export interface ProjectionResult {
   messages: AgentMessage[];
   appliedBlocks: number;
-  skippedBlocks: number;
+  /** Benign: an older overlapping summary was superseded by a newer one. */
+  supersededBlocks: number;
+  /** Real failures: these block ranges could not be applied to this request. */
+  failedBlockIds: string[];
 }
 
 /**
@@ -30,34 +33,44 @@ export function projectVirtualBlocksWithInfo(
   blocks: readonly VirtualCompressionBlock[],
 ): ProjectionResult {
   if (blocks.length === 0 || contextEntries.length === 0) {
-    return { messages: contextMessages, appliedBlocks: 0, skippedBlocks: 0 };
+    return { messages: contextMessages, appliedBlocks: 0, supersededBlocks: 0, failedBlockIds: [] };
   }
 
   const segments = mapSegments(contextMessages, contextEntries);
+  const failedBlockIds: string[] = [];
+  let supersededBlocks = 0;
+
   const candidates = blocks
     .map((block) => ({
       block,
       start: segments.findIndex((segment) => segment.entry.id === block.startEntryId),
       end: segments.findIndex((segment) => segment.entry.id === block.endEntryId),
     }))
-    .filter((candidate) => candidate.start >= 0 && candidate.end >= candidate.start)
-    .filter((candidate) => hasClosedToolPairs(segments, candidate.start, candidate.end))
+    .filter((candidate) => {
+      if (candidate.start >= 0 && candidate.end >= candidate.start) return true;
+      failedBlockIds.push(candidate.block.id);
+      return false;
+    })
+    .filter((candidate) => {
+      if (hasClosedToolPairs(segments, candidate.start, candidate.end)) return true;
+      failedBlockIds.push(candidate.block.id);
+      return false;
+    })
     .sort((a, b) => b.block.createdAt - a.block.createdAt || b.block.id.localeCompare(a.block.id));
 
-  const replacements = new Map<number, { end: number; message: AgentMessage }>();
-  let skippedBlocks = blocks.length - candidates.length;
+  const replacements = new Map<number, { end: number; message: AgentMessage; blockId: string }>();
   for (const candidate of candidates) {
     const span = mappedContiguousSpan(segments, candidate.start, candidate.end);
     if (!span) {
-      skippedBlocks++;
+      failedBlockIds.push(candidate.block.id);
       continue;
     }
     // A newer summary is authoritative if a persisted session contains overlap.
     if ([...replacements.entries()].some(([start, replacement]) => span.start <= replacement.end && span.end >= start)) {
-      skippedBlocks++;
+      supersededBlocks++;
       continue;
     }
-    replacements.set(span.start, { end: span.end, message: makeBlockMessage(candidate.block) });
+    replacements.set(span.start, { end: span.end, message: makeBlockMessage(candidate.block), blockId: candidate.block.id });
   }
 
   // Defensive live-pairing guard: a replacement must never orphan a live tool
@@ -65,12 +78,12 @@ export function projectVirtualBlocksWithInfo(
   for (const [start, replacement] of [...replacements.entries()]) {
     if (!livePairsStayClosed(contextMessages, replacements, start, replacement.end)) {
       replacements.delete(start);
-      skippedBlocks++;
+      failedBlockIds.push(replacement.blockId);
     }
   }
 
   if (replacements.size === 0) {
-    return { messages: contextMessages, appliedBlocks: 0, skippedBlocks };
+    return { messages: contextMessages, appliedBlocks: 0, supersededBlocks, failedBlockIds };
   }
 
   const output: AgentMessage[] = [];
@@ -83,7 +96,7 @@ export function projectVirtualBlocksWithInfo(
     }
     output.push(contextMessages[i]);
   }
-  return { messages: output, appliedBlocks: replacements.size, skippedBlocks };
+  return { messages: output, appliedBlocks: replacements.size, supersededBlocks, failedBlockIds };
 }
 
 export function projectVirtualBlocks(

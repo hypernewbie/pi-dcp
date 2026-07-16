@@ -183,7 +183,6 @@ export interface RuntimeState {
     projectedTokens: number;
     contextWindow: number;
     appliedBlocks: number;
-    skippedBlocks: number;
     timestamp: number;
   };
   compactionPreview?: CompactionPreview;

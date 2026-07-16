@@ -6,7 +6,8 @@ const completeSimpleMock = vi.fn();
 vi.mock("@earendil-works/pi-ai/compat", () => ({ completeSimple: (...args: unknown[]) => completeSimpleMock(...args) }));
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { projectVirtualBlocks } from "../src/context-projector.ts";
-import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, selectExactEvidence } from "../src/virtual-blocks.ts";
+import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, relieveContextPressure, selectExactEvidence } from "../src/virtual-blocks.ts";
+import { projectVirtualBlocksWithInfo } from "../src/context-projector.ts";
 import { selectCompressibleRange } from "../src/range-selector.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { VirtualCompressionBlock } from "../src/types.ts";
@@ -320,6 +321,51 @@ describe("virtual range compression", () => {
     expect(JSON.stringify(result[0])).toContain("same text");
     expect(JSON.stringify(result[1])).toContain("done");
     expect(JSON.stringify(result[2])).toContain("completed phase summary");
+  });
+
+  it("creates multiple blocks in one pass when one range cannot free enough", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    const entries = [
+      message("u1", "user", "x".repeat(30_000)), message("a1", "assistant", "done one"),
+      message("u2", "user", "y".repeat(30_000)), message("a2", "assistant", "done two"),
+      message("u3", "user", "z".repeat(30_000)), message("a3", "assistant", "done three"),
+      message("u4", "user", "active"),
+    ];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
+    const blocks: any[] = [];
+    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), blocks, undefined, "off" as any, 16_000, false);
+    expect(relief.created.length).toBeGreaterThanOrEqual(2);
+    expect(relief.freedTokens).toBeGreaterThanOrEqual(16_000);
+    expect(blocks).toHaveLength(relief.created.length);
+    // Ranges must be disjoint and chronological.
+    expect(relief.created[0].startEntryId).toBe("u1");
+    expect(relief.created[1].startEntryId).toBe("u2");
+  });
+
+  it("stops the relief pass once the target is met", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    const entries = [
+      message("u1", "user", "x".repeat(30_000)), message("a1", "assistant", "done one"),
+      message("u2", "user", "y".repeat(30_000)), message("a2", "assistant", "done two"),
+      message("u3", "user", "active"),
+    ];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
+    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any, 1_000, false);
+    expect(relief.created).toHaveLength(1);
+  });
+
+  it("classifies superseded overlaps as benign and dead ranges as failures", () => {
+    const entries = [message("u1", "user", "one"), message("a1", "assistant", "done"), message("u2", "user", "two"), message("a2", "assistant", "done"), message("u3", "user", "active")];
+    const raw = entries.map((entry) => (entry as any).message) as AgentMessage[];
+    const older = { ...block("u1", "a1"), createdAt: 1 };
+    const newer = { ...block("a1", "a2"), id: "block-2", summary: "newer", createdAt: 2 };
+    const dead = { ...block("gone-1", "gone-2"), id: "block-3" };
+    const result = projectVirtualBlocksWithInfo(raw, entries, [older, newer, dead]);
+    expect(result.appliedBlocks).toBe(1);
+    expect(result.supersededBlocks).toBe(1);
+    expect(result.failedBlockIds).toEqual(["block-3"]);
   });
 
   it("refuses a replacement that would orphan a live tool result outside the span", () => {
