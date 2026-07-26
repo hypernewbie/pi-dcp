@@ -59,19 +59,49 @@ export function appendVirtualBlockReceipt(
   block: VirtualCompressionBlock,
   details: { number: number; activeWorkingSetTokens: number },
 ): void {
-  const rawWorkingSet = Math.max(0, block.retainedRawTokens || details.activeWorkingSetTokens);
-  const bar = renderRangeBar(block.estimatedRawTokens, rawWorkingSet);
-  const mode = block.rangeKind === "active-prefix" ? "earlier active work" : "completed phase";
+  appendReliefReceipt(pi, [block], {
+    firstNumber: details.number,
+    activeWorkingSetTokens: details.activeWorkingSetTokens,
+  });
+}
+
+/** Emit one transcript card for the whole relief pass, never one card per range. */
+export function appendReliefReceipt(
+  pi: ExtensionAPI,
+  blocks: readonly VirtualCompressionBlock[],
+  details: { firstNumber: number; activeWorkingSetTokens: number },
+): void {
+  if (blocks.length === 0) return;
+  const totalRawTokens = blocks.reduce((sum, block) => sum + block.estimatedRawTokens, 0);
+  const totalBlockTokens = blocks.reduce((sum, block) => sum + block.estimatedBlockTokens, 0);
+  const totalMessages = blocks.reduce((sum, block) => sum + block.messagesCompressed, 0);
+  const totalTools = blocks.reduce((sum, block) => sum + block.toolsCompressed, 0);
+  const totalPrompts = blocks.reduce((sum, block) => sum + block.preservedUserMessages.length, 0);
+  const totalEvidenceTokens = blocks.reduce((sum, block) => sum + estimateTextTokens(block.exactEvidence), 0);
+  const finalBlock = blocks[blocks.length - 1];
+  const rawContextAfter = Math.max(0, finalBlock.retainedRawTokens || details.activeWorkingSetTokens);
+  const bar = renderRangeBar(totalRawTokens, rawContextAfter);
+  const firstNumber = details.firstNumber;
+  const lastNumber = firstNumber + blocks.length - 1;
+  const summaryLabel = blocks.length === 1 ? "summary" : "summaries";
+  const compressionLabel = blocks.length === 1
+    ? `▣ Compression #${firstNumber} -~${formatTokenCount(totalRawTokens)} removed, +~${formatTokenCount(totalBlockTokens)} ${summaryLabel}`
+    : `▣ Compression #${firstNumber}–#${lastNumber} · ${blocks.length} ranges`;
+  const rangeLabel = blocks.length === 1
+    ? `→ Range: ${finalBlock.startEntryId}..${finalBlock.endEntryId} · ${finalBlock.rangeKind === "active-prefix" ? "earlier active work" : "completed phase"}`
+    : `→ Ranges: ${blocks.length} completed phases`;
+  const contextLabel = blocks.length === 1 ? "range" : "pass";
+
   pi.appendEntry<{ text: string }>("dcp-receipt", {
     text: [
-      `▣ DCP | -~${formatTokenCount(block.estimatedRawTokens)} removed, +~${formatTokenCount(block.estimatedBlockTokens)} summary`,
+      `▣ DCP | -~${formatTokenCount(totalRawTokens)} removed, +~${formatTokenCount(totalBlockTokens)} ${summaryLabel}`,
       "",
       bar,
-      `▣ Compression #${details.number} -~${formatTokenCount(block.estimatedRawTokens)} removed, +~${formatTokenCount(block.estimatedBlockTokens)} summary`,
-      `→ Range: ${block.startEntryId}..${block.endEntryId} · ${mode}`,
-      `→ Items: ${block.messagesCompressed} messages and ${block.toolsCompressed} tool calls compressed`,
-      `→ User prompts preserved: ${block.preservedUserMessages.length}; exact evidence: ~${formatTokenCount(estimateTextTokens(block.exactEvidence))}`,
-      `→ Raw context after this range: ~${formatTokenCount(rawWorkingSet)}`,
+      compressionLabel,
+      rangeLabel,
+      `→ Items: ${totalMessages} messages and ${totalTools} tool calls compressed`,
+      `→ User prompts preserved: ${totalPrompts}; exact evidence: ~${formatTokenCount(totalEvidenceTokens)}`,
+      `→ Raw context after this ${contextLabel}: ~${formatTokenCount(rawContextAfter)}`,
       `░ summarized completed work · █ raw context retained`,
     ].join("\n"),
   });
@@ -116,6 +146,7 @@ export async function relieveContextPressure(
   showReceipts: boolean,
 ): Promise<{ created: VirtualCompressionBlock[]; freedTokens: number }> {
   const created: VirtualCompressionBlock[] = [];
+  const firstNumber = blocks.length + 1;
   let freedTokens = 0;
   for (let i = 0; i < MAX_BLOCKS_PER_RELIEF; i++) {
     if (created.length > 0 && freedTokens >= freeTargetTokens) break;
@@ -124,15 +155,15 @@ export async function relieveContextPressure(
     const block = await createVirtualBlock(pi, ctx, config, protection, blocks, focus, thinkingLevel, created.length === 0);
     if (!block) break;
     appendVirtualBlock(pi, block);
-    if (showReceipts) {
-      appendVirtualBlockReceipt(pi, block, {
-        number: blocks.length + 1,
-        activeWorkingSetTokens: config.contextRelief.activeWorkingSetTokens,
-      });
-    }
     blocks.push(block);
     created.push(block);
     freedTokens += Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
+  }
+  if (showReceipts && created.length > 0) {
+    appendReliefReceipt(pi, created, {
+      firstNumber,
+      activeWorkingSetTokens: config.contextRelief.activeWorkingSetTokens,
+    });
   }
   return { created, freedTokens };
 }

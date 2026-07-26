@@ -416,13 +416,20 @@ describe("virtual range compression", () => {
     const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
     const blocks: any[] = [];
-    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), blocks, undefined, "off" as any, 16_000, false);
+    const appended: unknown[][] = [];
+    const relief = await relieveContextPressure({ appendEntry: (...args: unknown[]) => appended.push(args) } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), blocks, undefined, "off" as any, 16_000, true);
     expect(relief.created.length).toBeGreaterThanOrEqual(2);
     expect(relief.freedTokens).toBeGreaterThanOrEqual(16_000);
     expect(blocks).toHaveLength(relief.created.length);
     // Ranges must be disjoint and chronological.
     expect(relief.created[0].startEntryId).toBe("u1");
     expect(relief.created[1].startEntryId).toBe("u2");
+    // Internally bounded ranges produce one consolidated transcript card.
+    const receipts = appended.filter(([type]) => type === "dcp-receipt");
+    expect(receipts).toHaveLength(1);
+    const receiptText = JSON.stringify(receipts[0][1]);
+    expect(receiptText).toContain(`${relief.created.length} ranges`);
+    expect(receiptText).toContain("Raw context after this pass");
   });
 
   it("does not escalate from historical work into the active turn in one pass", async () => {

@@ -15,7 +15,7 @@ A Pi extension adapted from OpenCode's DCP that gives you **controllable, config
 - **Custom compaction summaries**: The one-shot path can replace Pi's default summary with a DCP-style structured summary that preserves protected tools/files and artifact references. Bounded input budget prevents giant outputs from wrecking compaction.
 - **Subagent result preservation**: Parent-visible `subagent` results (conclusions + artifact paths) survive compaction without importing full child transcripts.
 - **Context-event pruning** (experimental, off by default): deduplicate repeated identical tool calls and purge large inputs from old errored tool calls (subagent results are exempt).
-- **OpenCode-faithful compression receipt**: for genuine DCP compressions, a cumulative `▣ DCP | -X removed, +Y summary` header, a per-run `▣ Compression #N` line, `░ ⣿ █` part bar, and `→ Items:`/`→ Origin:` lines — same shape as OpenCode DCP's own notification. Native Pi compactions are labelled `PI COMPACT` and never claim a fake DCP run identity.
+- **OpenCode-faithful compression receipt**: for genuine DCP compressions, a cumulative `▣ DCP | -X removed, +Y summary` header, a per-run `▣ Compression #N` line, `░ ⣿ █` part bar, and `→ Items:`/`→ Origin:` lines — same shape as OpenCode DCP's own notification. A pass that folds several ranges emits one consolidated receipt instead of stacking one card per range. Native Pi compactions are labelled `PI COMPACT` and never claim a fake DCP run identity.
 - **Honest stats**: `/dcp stats` shows persistent, branch-local compaction/pruning counts via custom session entries.
 - **`/dcp` commands**: inspect status, trigger compaction with focus, enable/disable, and locate config files.
 

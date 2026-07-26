@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3
+
+- A relief pass that folds several bounded ranges now emits one consolidated transcript receipt instead of stacking one large card per range. Totals, range count, items, preserved prompts, evidence, and final raw context are combined into that single card.
+
 ## 0.7.2
 
 - Fixed incorrect token accounting when compacting earlier work from the current task. Receipts, safety checks, and relief targets now use the exact selected span instead of the whole active turn.
