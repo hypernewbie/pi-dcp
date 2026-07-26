@@ -16,6 +16,10 @@ export interface VirtualRange {
   estimatedRawTokens: number;
 }
 
+// Below this size, the fixed summary/preserved-evidence overhead cannot provide
+// worthwhile relief. This is intentionally a safety policy, not a user knob.
+export const MIN_RANGE_RAW_TOKENS = 5_000;
+
 /** Select whole finished turns first, then an early active prefix. */
 export function selectCompressibleRange(
   entries: readonly SessionEntry[],
@@ -23,6 +27,8 @@ export function selectCompressibleRange(
   maxInputTokens: number,
   targetTokens = maxInputTokens,
   activeWorkingSetTokens = 0,
+  allowActivePrefix = true,
+  minRangeRawTokens = MIN_RANGE_RAW_TOKENS,
 ): VirtualRange | undefined {
   const covered = new Set<string>();
   for (const block of blocks) {
@@ -47,32 +53,47 @@ export function selectCompressibleRange(
   let startIndex = -1;
   let endIndex = -1;
   let estimated = 0;
+  const resetSelection = () => {
+    selected = [];
+    startIndex = -1;
+    endIndex = -1;
+    estimated = 0;
+  };
 
   for (const range of completeRanges) {
     const candidate = entries.slice(range.start, range.end + 1);
     if (candidate.length === 0) continue;
-    // Never make one range jump across an existing summary. That would create
-    // overlapping blocks and make one of their summaries stale.
-    if (candidate.some((entry) => covered.has(entry.id))) {
-      if (selected.length > 0) break;
+    // Never make one range jump across an existing summary or native summary.
+    // If the accumulated island is too small to be useful, leave it raw and
+    // keep scanning rather than wasting a summary call or hiding a later range.
+    const unavailable = candidate.some((entry) => covered.has(entry.id)) ||
+      candidate.some((entry) => entry.type === "compaction" || entry.type === "branch_summary");
+    if (unavailable) {
+      if (selected.length > 0 && estimated >= minRangeRawTokens) break;
+      resetSelection();
       continue;
     }
-    if (candidate.some((entry) => entry.type === "compaction" || entry.type === "branch_summary")) continue;
     const messages = candidate.flatMap((entry) => sessionEntryToContextMessages(entry));
     if (messages.length === 0) continue;
     const tokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
-    if (selected.length > 0 && estimated + tokens > maxInputTokens) break;
-    if (selected.length === 0 && tokens > maxInputTokens) continue;
+    if (selected.length > 0 && estimated + tokens > maxInputTokens) {
+      if (estimated >= minRangeRawTokens) break;
+      resetSelection();
+    }
+    if (tokens > maxInputTokens) continue;
     if (startIndex < 0) startIndex = range.start;
     endIndex = range.end;
     selected.push(...candidate);
     estimated += tokens;
-    if (estimated >= Math.min(targetTokens, maxInputTokens)) break;
+    const selectionTarget = Math.max(minRangeRawTokens, Math.min(targetTokens, maxInputTokens));
+    if (estimated >= selectionTarget) break;
   }
 
-  if (selected.length > 0 && startIndex >= 0 && endIndex >= 0) {
+  if (selected.length > 0 && startIndex >= 0 && endIndex >= 0 && estimated >= minRangeRawTokens) {
     return makeRange(entries, selected, startIndex, endIndex, estimated);
   }
+
+  if (!allowActivePrefix) return undefined;
 
   // A single uninterrupted tool run has no completed earlier turn. Keep the
   // newest active working set and only select boundaries after tool results.
@@ -85,18 +106,25 @@ export function selectCompressibleRange(
   const activeMessages = activeEntries.flatMap((entry) => sessionEntryToContextMessages(entry));
   const activeTokens = activeMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
   let prefixEnd = -1;
-  let prefixTokens = 0;
+  let runningPrefixTokens = 0;
+  let selectedPrefixTokens = 0;
   for (let i = 0; i < activeEntries.length; i++) {
     const entry = activeEntries[i];
     const entryMessages = sessionEntryToContextMessages(entry);
-    prefixTokens += entryMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+    runningPrefixTokens += entryMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
     if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-    const suffixTokens = activeTokens - prefixTokens;
-    if (suffixTokens >= activeWorkingSetTokens && prefixTokens <= maxInputTokens) prefixEnd = i;
+    const suffixTokens = activeTokens - runningPrefixTokens;
+    if (suffixTokens >= activeWorkingSetTokens && runningPrefixTokens <= maxInputTokens) {
+      prefixEnd = i;
+      // Capture the count at the actual cut point. The scan continues to find
+      // the newest safe tool boundary, so the running total cannot be returned.
+      selectedPrefixTokens = runningPrefixTokens;
+    }
   }
-  if (prefixEnd < 1) return undefined;
+  if (prefixEnd < 1 || selectedPrefixTokens < minRangeRawTokens) return undefined;
   const prefix = activeEntries.slice(0, prefixEnd + 1);
   if (prefix.some((entry) => covered.has(entry.id))) return undefined;
+  const currentRequestTokens = currentRequest.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
   return {
     kind: "active-prefix",
     startEntryId: prefix[0].id,
@@ -104,8 +132,8 @@ export function selectCompressibleRange(
     entries: prefix,
     messages: prefix.flatMap((entry) => sessionEntryToContextMessages(entry)),
     retainedMessages: [...currentRequest, ...activeEntries.slice(prefixEnd + 1).flatMap((entry) => sessionEntryToContextMessages(entry))],
-    retainedRawTokens: currentRequest.reduce((sum, message) => sum + estimateMessageTokens(message), 0) + (activeTokens - prefixTokens),
-    estimatedRawTokens: prefixTokens,
+    retainedRawTokens: currentRequestTokens + (activeTokens - selectedPrefixTokens),
+    estimatedRawTokens: selectedPrefixTokens,
   };
 }
 

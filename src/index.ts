@@ -146,7 +146,11 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         freeTarget,
         state.config.notification !== "off",
       );
-      if (relief.created.length === 0) return;
+      if (relief.created.length === 0) {
+        // Throttle futile retries until context grows materially again.
+        state.triggerState.tokensAtLastCompaction = usage.tokens;
+        return;
+      }
       state.triggerState.turnsSinceCompaction = 0;
       state.triggerState.tokensAtLastCompaction = usage.tokens;
       debug(ctx, state.config, `Compacted ${relief.created.length} range(s), ~${relief.freedTokens.toLocaleString()} tokens freed`);

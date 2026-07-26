@@ -8,7 +8,8 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { projectVirtualBlocks } from "../src/context-projector.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, relieveContextPressure, selectExactEvidence } from "../src/virtual-blocks.ts";
 import { projectVirtualBlocksWithInfo } from "../src/context-projector.ts";
-import { selectCompressibleRange } from "../src/range-selector.ts";
+import { MIN_RANGE_RAW_TOKENS, selectCompressibleRange } from "../src/range-selector.ts";
+import { estimateTextTokens } from "../src/utils.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { VirtualCompressionBlock } from "../src/types.ts";
 
@@ -20,6 +21,16 @@ function message(id: string, role: "user" | "assistant", text: string): SessionE
     timestamp: new Date().toISOString(),
     message: { role, content: [{ type: "text", text }], timestamp: Date.now() } as AgentMessage,
   } as SessionEntry;
+}
+
+function toolResult(id: string, text: string): SessionEntry {
+  return {
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: new Date().toISOString(),
+    message: { role: "toolResult", toolCallId: id, toolName: "bash", content: [{ type: "text", text }], timestamp: Date.now() },
+  } as unknown as SessionEntry;
 }
 
 function block(startEntryId: string, endEntryId: string): VirtualCompressionBlock {
@@ -50,7 +61,7 @@ describe("virtual range compression", () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "phase summary" }] });
     const entries = [
       message("u1", "user", "Keep this instruction"),
-      message("a1", "assistant", "done"),
+      message("a1", "assistant", `done ${"x".repeat(30_000)}`),
       { type: "message", id: "r1", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", content: [{ type: "text", text: "test failed: exact error" }], toolCallId: "t1", timestamp: Date.now() } } as unknown as SessionEntry,
       message("u2", "user", "current"),
     ];
@@ -71,6 +82,14 @@ describe("virtual range compression", () => {
     expect(completeSimpleMock.mock.calls[0][2].reasoning).toBe("high");
   });
 
+  it("does not spend a summary call on a range below the minimum useful size", async () => {
+    const entries = [message("u1", "user", "small"), message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
+    expect(result).toBeUndefined();
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+  });
+
   it("does not build a range larger than the selected summary model can accept", async () => {
     const entries = [message("u1", "user", "x".repeat(10_000)), message("a1", "assistant", "done"), message("u2", "user", "current")];
     const ctx = { model: { reasoning: false, maxTokens: 500, contextWindow: 1_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
@@ -81,7 +100,7 @@ describe("virtual range compression", () => {
 
   it("uses the range summary contract instead of a generic prose prompt", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "brief" }] });
-    const entries = [message("u1", "user", "x".repeat(10_000)), message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const entries = [message("u1", "user", "x".repeat(30_000)), message("a1", "assistant", "done"), message("u2", "user", "current")];
     const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
     const prompt = completeSimpleMock.mock.calls[0][1].messages[0].content[0].text;
@@ -95,9 +114,9 @@ describe("virtual range compression", () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "brief prefix" }] });
     const entries = [
       message("u1", "user", "current request must stay raw"),
-      message("a1", "assistant", "first action " + "x".repeat(10_000)),
+      message("a1", "assistant", "first action " + "x".repeat(30_000)),
       { type: "message", id: "r1", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "first result" }], timestamp: Date.now() } } as unknown as SessionEntry,
-      message("a2", "assistant", "newest action " + "y".repeat(10_000)),
+      message("a2", "assistant", "newest action " + "y".repeat(30_000)),
       { type: "message", id: "r2", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "t2", content: [{ type: "text", text: "newest result" }], timestamp: Date.now() } } as unknown as SessionEntry,
     ];
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, activeWorkingSetTokens: 1, maxChunkInputTokens: 60_000 } };
@@ -112,7 +131,7 @@ describe("virtual range compression", () => {
 
   it("uses compaction.summaryModel for range summaries when configured", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "brief" }] });
-    const entries = [message("u1", "user", "x".repeat(10_000)), message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const entries = [message("u1", "user", "x".repeat(30_000)), message("a1", "assistant", "done"), message("u2", "user", "current")];
     const summaryModel = { provider: "summary", id: "fast", reasoning: false, maxTokens: 10_000 };
     const ctx = {
       model: { provider: "main", id: "slow", reasoning: false, maxTokens: 10_000 },
@@ -134,6 +153,24 @@ describe("virtual range compression", () => {
     expect(result).toBeUndefined();
   });
 
+  it("rejects a summary with negligible net relief", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(21_000) }] });
+    const entries = [message("u1", "user", "brief request"), message("a1", "assistant", "x".repeat(24_000)), message("u2", "user", "current")];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
+    expect(completeSimpleMock).toHaveBeenCalledOnce();
+    expect(result).toBeUndefined();
+  });
+
+  it("rejects a summary that saves less than 25 percent of its range", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(64_000) }] });
+    const entries = [message("u1", "user", "brief request"), message("a1", "assistant", "x".repeat(80_000)), message("u2", "user", "current")];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
+    expect(completeSimpleMock).toHaveBeenCalledOnce();
+    expect(result).toBeUndefined();
+  });
+
   it("fails closed for provider errors and does not activate a block", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "error", errorMessage: "rate limited", content: [] });
     const entries = [message("u1", "user", "first"), message("a1", "assistant", "done"), message("u2", "user", "current")];
@@ -144,21 +181,21 @@ describe("virtual range compression", () => {
 
   it("selects finished turns and leaves the final active turn alone", () => {
     const entries = [message("u1", "user", "first"), message("a1", "assistant", "done"), message("u2", "user", "current"), message("a2", "assistant", "working")];
-    const range = selectCompressibleRange(entries, [], 10_000);
+    const range = selectCompressibleRange(entries, [], 10_000, 10_000, 0, true, 0);
     expect(range?.startEntryId).toBe("u1");
     expect(range?.endEntryId).toBe("a1");
   });
 
   it("combines oldest complete turns only up to the input cap", () => {
     const entries = [message("u1", "user", "one"), message("a1", "assistant", "done one"), message("u2", "user", "two"), message("a2", "assistant", "done two"), message("u3", "user", "active")];
-    const range = selectCompressibleRange(entries, [], 50_000, 50_000);
+    const range = selectCompressibleRange(entries, [], 50_000, 50_000, 0, true, 0);
     expect(range?.startEntryId).toBe("u1");
     expect(range?.endEntryId).toBe("a2");
   });
 
   it("skips a range already represented by a durable block", () => {
     const entries = [message("u1", "user", "one"), message("a1", "assistant", "done one"), message("u2", "user", "two"), message("a2", "assistant", "done two"), message("u3", "user", "active")];
-    const range = selectCompressibleRange(entries, [block("u1", "a1")], 50_000, 1);
+    const range = selectCompressibleRange(entries, [block("u1", "a1")], 50_000, 1, 0, true, 0);
     expect(range?.startEntryId).toBe("u2");
     expect(range?.endEntryId).toBe("a2");
   });
@@ -172,16 +209,59 @@ describe("virtual range compression", () => {
     const entries = [
       message("u1", "user", "current request"),
       message("a1", "assistant", "first tool call"),
-      { type: "message", id: "r1", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", content: [{ type: "text", text: "first result" }], toolCallId: "t1", timestamp: Date.now() } } as unknown as SessionEntry,
+      toolResult("r1", "first result"),
       message("a2", "assistant", "second tool call"),
-      { type: "message", id: "r2", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", content: [{ type: "text", text: "second result" }], toolCallId: "t2", timestamp: Date.now() } } as unknown as SessionEntry,
+      toolResult("r2", "second result"),
     ];
-    const range = selectCompressibleRange(entries, [], 10_000, 1_000, 1);
+    const range = selectCompressibleRange(entries, [], 10_000, 1_000, 1, true, 0);
     expect(range?.kind).toBe("active-prefix");
     expect(range?.startEntryId).toBe("a1");
     expect(range?.endEntryId).toBe("r1");
     expect(JSON.stringify(range?.messages)).not.toContain("current request");
     expect(JSON.stringify(range?.retainedMessages)).toContain("current request");
+  });
+
+  it("accounts active-prefix tokens at the actual cut point", () => {
+    const entries = [
+      message("u1", "user", "current request"),
+      message("a1", "assistant", "x".repeat(30_000)),
+      toolResult("r1", "first result"),
+      message("a2", "assistant", "y".repeat(30_000)),
+      toolResult("r2", "second result"),
+    ];
+    const range = selectCompressibleRange(entries, [], 60_000, 60_000, 5_000)!;
+    expect(range.kind).toBe("active-prefix");
+    const actualPrefixTokens = range.messages.reduce((sum, item) => sum + estimateTextTokens(JSON.stringify(item)), 0);
+    const actualRetainedTokens = range.retainedMessages.reduce((sum, item) => sum + estimateTextTokens(JSON.stringify(item)), 0);
+    expect(range.estimatedRawTokens).toBe(actualPrefixTokens);
+    expect(range.retainedRawTokens).toBe(actualRetainedTokens);
+    expect(range.retainedRawTokens).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("skips a tiny island and an oversized turn to find useful later history", () => {
+    const entries = [
+      message("u1", "user", "tiny"), message("a1", "assistant", "done"),
+      message("u2", "user", "oversized"), message("a2", "assistant", "x".repeat(280_000)),
+      message("u3", "user", "useful"), message("a3", "assistant", "y".repeat(30_000)),
+      message("u4", "user", "active"),
+    ];
+    const range = selectCompressibleRange(entries, [], 60_000, 60_000);
+    expect(range?.kind).toBe("historical");
+    expect(range?.startEntryId).toBe("u3");
+    expect(range?.endEntryId).toBe("a3");
+    expect(range?.estimatedRawTokens).toBeGreaterThanOrEqual(MIN_RANGE_RAW_TOKENS);
+  });
+
+  it("skips a tiny island before a covered range to find useful later history", () => {
+    const entries = [
+      message("u1", "user", "tiny"), message("a1", "assistant", "done"),
+      message("u2", "user", "covered"), message("a2", "assistant", "already summarized"),
+      message("u3", "user", "useful"), message("a3", "assistant", "y".repeat(30_000)),
+      message("u4", "user", "active"),
+    ];
+    const range = selectCompressibleRange(entries, [block("u2", "a2")], 60_000, 60_000);
+    expect(range?.startEntryId).toBe("u3");
+    expect(range?.endEntryId).toBe("a3");
   });
 
   it("replaces a mapped range and preserves the raw active suffix", () => {
@@ -270,6 +350,8 @@ describe("virtual range compression", () => {
     expect(appended[0][0]).toBe("dcp-context-range.v1");
     expect(appended[1][0]).toBe("dcp-receipt");
     expect(JSON.stringify(appended[1][1])).toContain("░ summarized completed work");
+    expect(JSON.stringify(appended[1][1])).toContain("Raw context after this range");
+    expect(JSON.stringify(appended[1][1])).not.toContain("Raw working set retained");
     expect(JSON.stringify(appended[1][1])).not.toMatch(/PLAN3|virtual block|legacy/i);
   });
 
@@ -341,6 +423,51 @@ describe("virtual range compression", () => {
     // Ranges must be disjoint and chronological.
     expect(relief.created[0].startEntryId).toBe("u1");
     expect(relief.created[1].startEntryId).toBe("u2");
+  });
+
+  it("does not escalate from historical work into the active turn in one pass", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    const entries = [
+      message("u1", "user", "historical"), message("a0", "assistant", "h".repeat(30_000)),
+      message("u2", "user", "current request"),
+      message("a1", "assistant", "x".repeat(30_000)), toolResult("r1", "first result"),
+      message("a2", "assistant", "y".repeat(30_000)), toolResult("r2", "second result"),
+    ];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 10_000, targetHeadroomTokens: 10_000, activeWorkingSetTokens: 5_000 } };
+    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any, 50_000, false);
+    expect(relief.created).toHaveLength(1);
+    expect(relief.created[0].rangeKind).toBe("historical");
+    expect(completeSimpleMock).toHaveBeenCalledOnce();
+  });
+
+  it("still allows one automatic active-prefix block when no historical range exists", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    const entries = [
+      message("u1", "user", "current request"),
+      message("a1", "assistant", "x".repeat(30_000)), toolResult("r1", "first result"),
+      message("a2", "assistant", "y".repeat(30_000)), toolResult("r2", "second result"),
+    ];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 10_000, targetHeadroomTokens: 10_000, activeWorkingSetTokens: 5_000 } };
+    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any, 50_000, false);
+    expect(relief.created).toHaveLength(1);
+    expect(relief.created[0].rangeKind).toBe("active-prefix");
+    expect(completeSimpleMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an active-prefix summary larger than the span it replaces", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(30_000) }] });
+    const entries = [
+      message("u1", "user", "current request"),
+      message("a1", "assistant", "x".repeat(24_000)), toolResult("r1", "first result"),
+      message("a2", "assistant", "y".repeat(24_000)), toolResult("r2", "second result"),
+    ];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, activeWorkingSetTokens: 5_000 } };
+    const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any);
+    expect(completeSimpleMock).toHaveBeenCalledOnce();
+    expect(result).toBeUndefined();
   });
 
   it("stops the relief pass once the target is met", async () => {

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2
+
+- Fixed incorrect token accounting when compacting earlier work from the current task. Receipts, safety checks, and relief targets now use the exact selected span instead of the whole active turn.
+- Automatic multi-range relief no longer escalates from completed history into the current task in the same pass. Current-task relief remains available as a single last-resort action when no completed history can be folded.
+- Skips ranges below 5,000 estimated tokens before calling the summary model, while continuing past tiny or oversized gaps to find useful later history.
+- Rejects summaries unless they save at least 1,000 estimated tokens and at least 25% of the selected range.
+- Clarified receipts to report "Raw context after this range" and throttled repeated automatic retries after a pass finds no worthwhile range.
+- Known limitation: a single completed turn larger than the configured chunk input remains unselectable until historical-turn chunking is implemented separately.
+
 ## 0.7.1
 
 - Documented the maintenance contract for the context-display override (exact Pi internals it depends on, how breakage manifests, how to re-verify and fix).

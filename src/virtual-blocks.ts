@@ -61,7 +61,7 @@ export function appendVirtualBlockReceipt(
 ): void {
   const rawWorkingSet = Math.max(0, block.retainedRawTokens || details.activeWorkingSetTokens);
   const bar = renderRangeBar(block.estimatedRawTokens, rawWorkingSet);
-  const mode = block.rangeKind === "active-prefix" ? "active-prefix" : "completed phase";
+  const mode = block.rangeKind === "active-prefix" ? "earlier active work" : "completed phase";
   pi.appendEntry<{ text: string }>("dcp-receipt", {
     text: [
       `▣ DCP | -~${formatTokenCount(block.estimatedRawTokens)} removed, +~${formatTokenCount(block.estimatedBlockTokens)} summary`,
@@ -71,8 +71,8 @@ export function appendVirtualBlockReceipt(
       `→ Range: ${block.startEntryId}..${block.endEntryId} · ${mode}`,
       `→ Items: ${block.messagesCompressed} messages and ${block.toolsCompressed} tool calls compressed`,
       `→ User prompts preserved: ${block.preservedUserMessages.length}; exact evidence: ~${formatTokenCount(estimateTextTokens(block.exactEvidence))}`,
-      `→ Raw working set retained: ~${formatTokenCount(rawWorkingSet)}`,
-      `░ summarized completed work · █ raw working set retained`,
+      `→ Raw context after this range: ~${formatTokenCount(rawWorkingSet)}`,
+      `░ summarized completed work · █ raw context retained`,
     ].join("\n"),
   });
 }
@@ -95,6 +95,8 @@ export function retireVirtualBlock(pi: ExtensionAPI, blockId: string): void {
 }
 
 const MAX_BLOCKS_PER_RELIEF = 6;
+const MIN_NET_RELIEF_TOKENS = 1_000;
+const MIN_NET_RELIEF_RATIO = 0.25;
 
 /**
  * Create as many bounded summaries as needed to free approximately
@@ -117,7 +119,9 @@ export async function relieveContextPressure(
   let freedTokens = 0;
   for (let i = 0; i < MAX_BLOCKS_PER_RELIEF; i++) {
     if (created.length > 0 && freedTokens >= freeTargetTokens) break;
-    const block = await createVirtualBlock(pi, ctx, config, protection, blocks, focus, thinkingLevel);
+    // Active-prefix relief is the last resort for a single uninterrupted run,
+    // never an escalation after completed history was already folded this pass.
+    const block = await createVirtualBlock(pi, ctx, config, protection, blocks, focus, thinkingLevel, created.length === 0);
     if (!block) break;
     appendVirtualBlock(pi, block);
     if (showReceipts) {
@@ -141,6 +145,7 @@ export async function createVirtualBlock(
   blocks: VirtualCompressionBlock[],
   focus: string | undefined,
   thinkingLevel: ThinkingLevel,
+  allowActivePrefix = true,
 ): Promise<VirtualCompressionBlock | undefined> {
   if (typeof ctx.sessionManager.buildContextEntries !== "function") return undefined;
 
@@ -166,6 +171,7 @@ export async function createVirtualBlock(
     Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit),
     Math.min(config.contextRelief.targetHeadroomTokens, modelInputLimit),
     config.contextRelief.activeWorkingSetTokens,
+    allowActivePrefix,
   );
   if (!range) return undefined;
 
@@ -219,9 +225,11 @@ export async function createVirtualBlock(
     const composed = appendPreservedUserMessages(summary, range.messages, undefined, config.contextRelief.preservedUserMessageTokens);
     const full = evidence ? `${composed}\n\n## Exact evidence\n\n${evidence}` : composed;
     const estimatedBlockTokens = estimateTextTokens(full);
-    // A summary that is not smaller cannot provide context relief. Leave the
-    // raw range intact and let later growth produce a better candidate.
-    if (estimatedBlockTokens >= range.estimatedRawTokens) return undefined;
+    const netReliefTokens = range.estimatedRawTokens - estimatedBlockTokens;
+    // Tiny wins do not justify a durable summary or a full model call. Require
+    // both meaningful absolute relief and a meaningful fraction of the range.
+    if (netReliefTokens < MIN_NET_RELIEF_TOKENS ||
+        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) return undefined;
     const items = countRangeItems(range.messages);
     return {
       version: 1,
