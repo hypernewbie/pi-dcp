@@ -1,5 +1,6 @@
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { keyHint, type ExtensionAPI, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   listSessionHistory,
@@ -47,7 +48,65 @@ export function registerSessionReaderTool(pi: ExtensionAPI): void {
         details: result.details,
       };
     },
+    renderCall(args, theme) {
+      return new Text(theme.fg("toolTitle", theme.bold(renderCallLabel(args))), 0, 0);
+    },
+    renderResult(result, { expanded, isPartial }, theme) {
+      if (isPartial) return new Text(theme.fg("warning", "Reading session history…"), 0, 0);
+      const details = result.details as SessionHistoryResult["details"] | undefined;
+      if (expanded) {
+        const raw = result.content.find((part) => part.type === "text");
+        const text = raw?.type === "text" ? raw.text : "No text returned.";
+        const styled = text.split("\n").map((line) => theme.fg("toolOutput", line)).join("\n");
+        return new Text(styled, 0, 0);
+      }
+      if (details?.error) return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
+      const summary = renderCollapsedResult(details);
+      return new Text(
+        theme.fg("success", "✓ ") + theme.fg("muted", summary) + theme.fg("dim", ` (${keyHint("app.tools.expand", "to expand")})`),
+        0,
+        0,
+      );
+    },
   });
+}
+
+function renderCallLabel(params: Params): string {
+  if (params.action === "search") return `session history search ${quoteInline(params.query ?? "")}`;
+  if (params.action === "read") {
+    const start = shortId(params.startEntryId);
+    const end = shortId(params.endEntryId);
+    return `session history read ${start}${start === end ? "" : `…${end}`}`;
+  }
+  return "session history list";
+}
+
+function renderCollapsedResult(details: SessionHistoryResult["details"] | undefined): string {
+  if (!details) return "session history returned";
+  const count = details.returnedIds.length;
+  const itemLabel = details.action === "search"
+    ? `${count} match${count === 1 ? "" : "es"}`
+    : `${count} entr${count === 1 ? "y" : "ies"}`;
+  const size = details.estimatedTokens > 0 ? ` · ~${formatTokens(details.estimatedTokens)} tokens` : "";
+  const more = details.moreAvailable ? " · more available" : "";
+  return `${itemLabel}${size}${more}`;
+}
+
+function quoteInline(text: string): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const bounded = compact.length > 80 ? `${compact.slice(0, 77)}…` : compact;
+  return JSON.stringify(bounded);
+}
+
+function shortId(value: string | undefined): string {
+  if (!value) return "?";
+  return value.length > 8 ? value.slice(0, 8) : value;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens < 1_000) return String(tokens);
+  if (tokens < 10_000) return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}K`;
+  return `${Math.round(tokens / 1_000)}K`;
 }
 
 function dispatch(params: Params, entries: SessionEntry[]): SessionHistoryResult {

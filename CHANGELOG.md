@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.4
+
+- `dcp_read_session` now renders a compact one-line result in the transcript by default while preserving the complete bounded result for the model. Expand tool output to inspect the full excerpt. Errors remain visible when collapsed.
+
 ## 0.7.3
 
 - A relief pass that folds several bounded ranges now emits one consolidated transcript receipt instead of stacking one large card per range. Totals, range count, items, preserved prompts, evidence, and final raw context are combined into that single card.
