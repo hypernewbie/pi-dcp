@@ -65,7 +65,7 @@ async function handleVirtualCompact(
     return;
   }
   if (continueRequested) {
-    notify(ctx, state.config, "Compact does not interrupt a running task; continuing is automatic.", "info");
+    notify(ctx, state.config, "Compact does not interrupt a running task; the _continue variant is a no-op here.", "info");
   }
   if (state.triggerState.isCompacting) return;
   state.triggerState.isCompacting = true;
@@ -206,7 +206,7 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
     "  /dcp stats           Show compaction/pruning stats (current branch)",
     "  /dcp compact [focus] Fold older completed work into a summary without interrupting the task",
     "  /dcp compress [focus] Run full one-shot context compaction with a detailed summary",
-    "  /dcp compact_continue [focus] Same as compact; the task continues automatically",
+    "  /dcp compact_continue [focus] Alias of /dcp compact; the task is never interrupted",
     "  /dcp compress_continue [focus] Compress now, then resume the interrupted task afterward",
     "  /dcp threshold <percent|null> <absolute|null> Set dual-threshold for this session only (not saved)",
     "  /dcp enable          Enable pi-dcp for this session",

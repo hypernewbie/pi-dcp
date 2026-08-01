@@ -233,6 +233,42 @@ describe("extension entry point", () => {
     expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(true);
   });
 
+  it("/dcp compact_continue is a documented alias of /dcp compact and never claims to force a resume", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => undefined,
+      sessionManager: { getBranch: () => [] },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+    };
+
+    for (const h of hooks["session_start"] ?? []) {
+      await h({ type: "session_start", reason: "new" }, ctx);
+    }
+
+    const dcpCommand = commands.find((c) => c.name === "dcp")!;
+    // The _continue variant must not throw and must not pretend to start a
+    // compaction. (It used to claim it would force a resume, which is wrong
+    // because the compact family never interrupts the running task.)
+    await dcpCommand.handler!("compact_continue", ctx);
+    const compactContinueNotices = notifiedMessages.filter((m) => m.includes("no-op"));
+    expect(compactContinueNotices.length).toBe(1);
+    // And it must never have asked Pi to compact (which would abort a run).
+    expect((mockApi as any).compactCallCount ?? 0).toBe(0);
+  });
+
   it("context hook injects a persisted summary while keeping the active suffix raw", async () => {
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};

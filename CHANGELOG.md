@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.5
+
+- `/dcp compact_continue` is now an explicit, documented alias of `/dcp compact`. The compact family never interrupts the running task, so a separate force-resume variant is meaningless; the notification now says so honestly instead of implying that a resume will be forced.
+
 ## 0.7.4
 
 - `dcp_read_session` now renders a compact one-line result in the transcript by default while preserving the complete bounded result for the model. Expand tool output to inspect the full excerpt. Errors remain visible when collapsed.
