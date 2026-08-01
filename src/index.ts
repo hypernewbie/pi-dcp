@@ -164,8 +164,18 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const usage = ctx.getContextUsage();
     recordCompactionCompleted(state.triggerState, usage?.tokens ?? null);
 
-    // Determine initiator: prefer preview, else pending, else pi-native
-    const initiator: CompactionInitiator = state.compactionPreview?.initiator ?? state.triggerState.pendingInitiator ?? "pi-native";
+    // The preview was created from pendingInitiator BEFORE we knew whether
+    // handleSessionBeforeCompact would actually run. If Pi did not use an
+    // extension-provided summary (event.fromExtension is false), the real
+    // initiator for this run was Pi itself, regardless of what we asked for.
+    // The receipts and stats must reflect that honestly.
+    const previewInitiator = state.compactionPreview?.initiator;
+    const initiator: CompactionInitiator = event.fromExtension
+      ? (previewInitiator ?? state.triggerState.pendingInitiator ?? "pi-native")
+      : "pi-native";
+    if (previewInitiator && previewInitiator !== "pi-native" && !event.fromExtension) {
+      notify(ctx, state.config, `DCP custom summary did not run; Pi's default summary was used instead.`, "warning");
+    }
     const hostReason = event.reason;
     const summaryProvider = event.fromExtension ? ("dcp" as const) : ("pi" as const);
     const tokensBefore = state.compactionPreview?.tokensBefore ?? event.compactionEntry?.tokensBefore ?? 0;
@@ -376,8 +386,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   pi.on("session_before_compact", async (event, ctx) => {
     const initiator = state.triggerState.pendingInitiator ?? "pi-native";
     const focusIsUserSupplied = state.triggerState.pendingFocusIsExplicit;
-    const preview = createCompactionPreview(event, initiator, focusIsUserSupplied);
-    state.compactionPreview = preview;
 
     // Only substitute DCP's own custom summary when pi-dcp explicitly asked for
     // the one-shot /dcp compress path. A plain native /compact, or Pi's own
@@ -385,7 +393,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     // default summary untouched - pi-dcp still reports it honestly (as
     // "PI COMPACT", never a fake DCP run identity) without hijacking what the
     // user or Pi itself asked for.
-    if (initiator === "pi-native") return undefined;
+    if (initiator === "pi-native") {
+      state.compactionPreview = undefined;
+      return undefined;
+    }
+
+    const preview = createCompactionPreview(event, initiator, focusIsUserSupplied);
+    state.compactionPreview = preview;
 
     return handleSessionBeforeCompact(event, ctx, state.config, state.protection, preview, pi.getThinkingLevel());
   });

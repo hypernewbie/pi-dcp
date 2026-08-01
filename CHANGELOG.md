@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.6
+
+- Fixed: when `/dcp compress` was requested but DCP's custom summary failed (no model, provider error, empty response, etc.) the receipt was still labeled as a DCP run even though Pi's default summary was actually used. The receipt is now derived from `event.fromExtension` and honestly labeled `PI NATIVE` in that case, with a clear "DCP custom summary did not run; Pi's default summary was used instead" notification.
+
 ## 0.7.5
 
 - `/dcp compact_continue` is now an explicit, documented alias of `/dcp compact`. The compact family never interrupts the running task, so a separate force-resume variant is meaningless; the notification now says so honestly instead of implying that a resume will be forced.

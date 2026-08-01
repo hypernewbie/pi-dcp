@@ -179,7 +179,7 @@ describe("extension entry point", () => {
       sessionManager: { getBranch: () => [] },
       isIdle: () => true,
       hasPendingMessages: () => false,
-      compact: () => {},
+      compact: function () { (ctx as any).compactCalled = ((ctx as any).compactCalled ?? 0) + 1; },
       // No model available: if handleSessionBeforeCompact runs, it must notify
       // "No model available..." and fall back - that notification is the signal
       // we use below to detect whether the custom-summary path was reached at all.
@@ -231,6 +231,90 @@ describe("extension entry point", () => {
       await h(makeBeforeEvent("manual"), ctx);
     }
     expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(true);
+  });
+
+  it("downgrades the receipt to PI NATIVE when the DCP custom summary was requested but Pi used its default", async () => {
+    // Regression test for a real bug: handleSessionBeforeCompact can fail (no
+    // model, provider error, empty response) and return undefined, in which
+    // case Pi falls back to its own default summary. session_compact used to
+    // read the stale preview and report the run as a DCP command even though
+    // event.fromExtension was false - the receipt would have claimed a DCP
+    // run that never actually ran. It must report pi-native and warn the user.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 200000, contextWindow: 400000 }),
+      sessionManager: { getBranch: () => [], buildContextEntries: () => [] },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: function () { (ctx as any).compactCalled = ((ctx as any).compactCalled ?? 0) + 1; },
+      model: undefined,
+    };
+
+    for (const h of hooks["session_start"] ?? []) {
+      await h({ type: "session_start", reason: "new" }, ctx);
+    }
+
+    const dcpCommand = commands.find((c) => c.name === "dcp")!;
+    await dcpCommand.handler!("compress", ctx);
+
+    // Simulate the full Pi compaction flow: session_before_compact, then
+    // session_compact with fromExtension=false (Pi's default summary was used
+    // because DCP's custom summary failed in handleSessionBeforeCompact).
+    const before = hooks["session_before_compact"]?.[0];
+    if (!before) throw new Error("session_before_compact handler not registered");
+    const beforeEvent: any = {
+      type: "session_before_compact",
+      preparation: {
+        messagesToSummarize: [{ role: "user", content: [{ type: "text", text: "u1" }] }],
+        turnPrefixMessages: [],
+        tokensBefore: 200000,
+        firstKeptEntryId: "keep-1",
+        previousSummary: undefined,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      branchEntries: [],
+      customInstructions: undefined,
+      reason: "manual",
+      willRetry: false,
+      signal: new AbortController().signal,
+    };
+    const beforeResult = await before(beforeEvent, ctx);
+    // handleSessionBeforeCompact requires a model; with no model it returns
+    // undefined and Pi's default summary proceeds.
+    expect(beforeResult).toBeUndefined();
+
+    const compactEvent: any = {
+      type: "session_compact",
+      compactionEntry: {
+        id: "compaction-1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        type: "compaction",
+        summary: "Default Pi summary text.",
+        firstKeptEntryId: "keep-1",
+        tokensBefore: 200000,
+      },
+      fromExtension: false,
+      reason: "manual",
+      willRetry: false,
+    };
+    for (const h of hooks["session_compact"] ?? []) {
+      await h(compactEvent, ctx);
+    }
+
+    expect(notifiedMessages.some((m) => m.toLowerCase().includes("dcp custom summary did not run"))).toBe(true);
   });
 
   it("/dcp compact_continue is a documented alias of /dcp compact and never claims to force a resume", async () => {
@@ -375,7 +459,7 @@ describe("extension entry point", () => {
       sessionManager: { getBranch: () => [] },
       isIdle: () => true,
       hasPendingMessages: () => false,
-      compact: () => {},
+      compact: function () { (ctx as any).compactCalled = ((ctx as any).compactCalled ?? 0) + 1; },
       model: undefined,
     };
 
