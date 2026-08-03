@@ -37,6 +37,7 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState, projecti
         case "config":
           return handleConfig(ctx, state);
         case "status":
+        case "context":
           return showStatus(ctx, state);
         case "stats":
           return showStats(ctx, state);
@@ -314,7 +315,7 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
   const text = [
     "pi-dcp commands:",
     "  /dcp                 Show this help and current status",
-    "  /dcp status          Show current context/threshold status",
+    "  /dcp status | context  Show current context/threshold status (with projected vctx after /dcp compact)",
     "  /dcp stats           Show compaction/pruning stats (current branch)",
     "  /dcp compact [focus] Fold older completed work into a summary without interrupting the task",
     "  /dcp compress [focus] Run full one-shot context compaction with a detailed summary",

@@ -208,6 +208,43 @@ describe("extension entry point", () => {
     }
   });
 
+  it("/dcp context is an alias for /dcp status and shows the same output", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 100, contextWindow: 1000 }),
+      sessionManager: { getBranch: () => [] },
+      isIdle: () => true,
+    };
+    for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+    const dcpCommand = commands.find((c) => c.name === "dcp")!;
+
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    const statusOutput = notifiedMessages.join("\n");
+
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("context", ctx);
+    const contextOutput = notifiedMessages.join("\n");
+
+    expect(contextOutput).toBe(statusOutput);
+    // And the key fields are present.
+    expect(contextOutput).toContain("pi-dcp:");
+    expect(contextOutput).toContain("context:");
+    expect(contextOutput).toContain("thresholds:");
+  });
+
   it("/dcp compress mid-run deferred to turn_end: creates virtual blocks THEN aborts (no race)", async () => {
     // The fix: /dcp compress must NOT race the live run. It creates virtual
     // blocks first (via the existing context magic), persists them, and only

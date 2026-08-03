@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.8
+
+- `/dcp context` is now an alias for `/dcp status`. Useful when the footer percentage doesn't reflect the projected (post-`/dcp compact`) size — running this prints the full status including the vctx line so the user can see the actual sent context size.
+
 ## 0.8.7
 
 - Strengthened the auto-trigger test: the previous test only verified the widget appeared and that `ctx.compact` was not called, which passes vacuously when the auto-trigger runs but the summarizer fails (no model, etc.) and no blocks are created. The new test wires a real model + mock summarizer + real branch and asserts the summarizer was actually called - proving the auto-trigger does the surgical compression, not just shows a spinner.
