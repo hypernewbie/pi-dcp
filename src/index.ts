@@ -41,7 +41,11 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   // Shared with the live getContextUsage patch so Pi's own footer percentage
   // reflects the projected request instead of the raw session estimate.
   const projectionRef: VirtualUsageRef = {};
-  const warnedBlockIds = new Set<string>();
+  // Consecutive projection failures per block. A block that cannot be applied
+  // twice in a row is structurally dead (its range was rewritten or split), so
+  // it is retired instead of being retried on every request forever.
+  const blockFailureCounts = new Map<string, number>();
+  const RETIRE_AFTER_CONSECUTIVE_FAILURES = 2;
   installVirtualContextUsage(projectionRef);
 
   registerCommands(pi, state);
@@ -76,7 +80,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     state.compactionPreview = undefined;
     state.lastProjection = undefined;
     projectionRef.current = undefined;
-    warnedBlockIds.clear();
+    blockFailureCounts.clear();
 
     // Rebuild stats from current branch custom entries
     try {
@@ -326,14 +330,34 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         timestamp: Date.now(),
       };
       projectionRef.current = state.lastProjection;
-      // A superseded overlap is normal (a newer summary replaced an older one).
-      // Only genuine per-block failures warrant a warning, and only once each.
-      const newFailures = projection.failedBlockIds.filter((id) => !warnedBlockIds.has(id));
-      if (newFailures.length > 0) {
-        for (const id of newFailures) warnedBlockIds.add(id);
-        notify(ctx, state.config, `${newFailures.length} stored context summar${newFailures.length === 1 ? "y" : "ies"} no longer match${newFailures.length === 1 ? "es" : ""} this session's history; the original raw messages were sent instead.`, "warning");
-      } else if (projection.failedBlockIds.length > 0) {
-        debug(ctx, state.config, `${projection.failedBlockIds.length} known-stale summaries skipped`);
+      // A superseded overlap is normal (a newer summary replaced an older one)
+      // and is never reported. A genuine failure is only interesting if it
+      // persists: transient branch states can fail one projection harmlessly.
+      const failed = new Set(projection.failedBlockIds);
+      for (const id of [...blockFailureCounts.keys()]) {
+        if (!failed.has(id)) blockFailureCounts.delete(id);
+      }
+      const retiredNow: string[] = [];
+      for (const id of failed) {
+        const count = (blockFailureCounts.get(id) ?? 0) + 1;
+        blockFailureCounts.set(id, count);
+        if (count < RETIRE_AFTER_CONSECUTIVE_FAILURES) continue;
+        try {
+          retireVirtualBlock(pi, id);
+          retiredNow.push(id);
+        } catch {
+          // Retirement is best effort; failing to persist it must not break the request.
+        }
+      }
+      if (retiredNow.length > 0) {
+        for (const id of retiredNow) blockFailureCounts.delete(id);
+        state.virtualBlocks = state.virtualBlocks.filter((block) => !retiredNow.includes(block.id));
+        notify(
+          ctx,
+          state.config,
+          `Discarded ${retiredNow.length} summar${retiredNow.length === 1 ? "y" : "ies"} that no longer fit this session's history. Nothing was lost: the original messages are intact and were sent in full.`,
+          "info",
+        );
       }
     } catch (error) {
       state.lastProjection = undefined;

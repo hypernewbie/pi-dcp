@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { selectCompressibleRange, type VirtualRange } from "./range-selector.ts";
+import { entryRangeCanBeReplaced } from "./context-projector.ts";
 import type {
   DcpBlockEntryData,
   DcpConfig,
@@ -205,6 +206,11 @@ export async function createVirtualBlock(
     allowActivePrefix,
   );
   if (!range) return undefined;
+
+  // Refuse before spending a summary call: if the projector could not replace
+  // this exact range, the block would be created, persisted, and then rejected
+  // on every future request forever.
+  if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) return undefined;
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok) return undefined;

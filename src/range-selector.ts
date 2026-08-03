@@ -108,11 +108,23 @@ export function selectCompressibleRange(
   let prefixEnd = -1;
   let runningPrefixTokens = 0;
   let selectedPrefixTokens = 0;
+  // Tool calls awaiting their result. Cutting while any are open would leave a
+  // call inside the summarized range and its result outside it, which the
+  // projector must reject - so such a block could never be applied at all.
+  // Parallel tool calls make this the common case, not an edge case.
+  const openToolCallIds = new Set<string>();
   for (let i = 0; i < activeEntries.length; i++) {
     const entry = activeEntries[i];
     const entryMessages = sessionEntryToContextMessages(entry);
     runningPrefixTokens += entryMessages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+    for (const message of entryMessages) {
+      if (message.role === "assistant") {
+        for (const part of message.content) if (part.type === "toolCall") openToolCallIds.add(part.id);
+      }
+      if (message.role === "toolResult") openToolCallIds.delete(message.toolCallId);
+    }
     if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
+    if (openToolCallIds.size > 0) continue;
     const suffixTokens = activeTokens - runningPrefixTokens;
     if (suffixTokens >= activeWorkingSetTokens && runningPrefixTokens <= maxInputTokens) {
       prefixEnd = i;

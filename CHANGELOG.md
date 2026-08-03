@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- **Fixed the real cause of "N stored context summaries no longer match this session's history".** Message identity included model reasoning/thinking parts, so any turn whose reasoning was rewritten stopped matching its stored copy and every summary covering it was stranded permanently. Reasoning content carries no conversational meaning and is now excluded from identity. This specifically repairs sessions repaired by a reasoning-repair tool (which inserts a thinking block before an existing reply) and any provider that varies or redacts reasoning.
+- **Stopped creating summaries that can never be applied.** With parallel tool calls, one assistant message holds several calls whose results arrive separately. Compressing earlier active work could cut between them, leaving a call inside the summary and its result outside, which projection must reject. Such a range is no longer selected, and creation now refuses any range the projector could not replace - before spending a summary call.
+- **Dead summaries are now discarded instead of retried forever.** A summary that cannot be applied twice in a row is retired, so it stops being re-attempted on every request. The message is no longer an alarming repeated warning: it states once that the summaries were discarded and that the original messages are intact and were sent in full.
+
 ## 0.7.6
 
 - Fixed: when `/dcp compress` was requested but DCP's custom summary failed (no model, provider error, empty response, etc.) the receipt was still labeled as a DCP run even though Pi's default summary was actually used. The receipt is now derived from `event.fromExtension` and honestly labeled `PI NATIVE` in that case, with a clear "DCP custom summary did not run; Pi's default summary was used instead" notification.

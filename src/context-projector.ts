@@ -213,16 +213,51 @@ function hasClosedToolPairs(segments: Segment[], start: number, end: number): bo
   return true;
 }
 
+/** Model-internal reasoning content, in any of the shapes Pi/providers emit. */
+function isReasoningPart(part: unknown): boolean {
+  if (!part || typeof part !== "object") return false;
+  const type = (part as { type?: unknown }).type;
+  return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
+}
+
+/**
+ * True when the entry range can actually be replaced without orphaning a tool
+ * call from its result. Creation and projection MUST share this check, or a
+ * block gets created (paying for a summary) that the projector rejects forever.
+ */
+export function entryRangeCanBeReplaced(
+  contextEntries: readonly SessionEntry[],
+  startEntryId: string,
+  endEntryId: string,
+): boolean {
+  const segments: Segment[] = contextEntries.map((entry) => ({
+    entry,
+    messages: sessionEntryToContextMessages(entry),
+  }));
+  const start = segments.findIndex((segment) => segment.entry.id === startEntryId);
+  const end = segments.findIndex((segment) => segment.entry.id === endEntryId);
+  if (start < 0 || end < start) return false;
+  return hasClosedToolPairs(segments, start, end);
+}
+
 function messageKey(message: AgentMessage): string {
   switch (message.role) {
     case "user":
       return `user:${contentKey(message.content)}`;
     case "assistant":
-      return `assistant:${message.content.map((part) => {
-        if (part.type === "text") return `text:${part.text}`;
-        if (part.type === "toolCall") return `call:${part.id}:${part.name}:${stableJson(part.arguments)}`;
-        return part.type;
-      }).join("|")}`;
+      // Reasoning/thinking parts are deliberately excluded from identity. They
+      // carry no conversational meaning and are legitimately rewritten by
+      // providers, redaction, and session repair tools (a repaired turn gains a
+      // thinking block before its reply). Including them made an otherwise
+      // identical turn unrecognizable, which permanently stranded stored
+      // summaries and produced "no longer match this session's history".
+      return `assistant:${message.content
+        .filter((part) => !isReasoningPart(part))
+        .map((part) => {
+          if (part.type === "text") return `text:${part.text}`;
+          if (part.type === "toolCall") return `call:${part.id}:${part.name}:${stableJson(part.arguments)}`;
+          return part.type;
+        }).join("|")}`;
     case "toolResult":
       return `result:${message.toolCallId}:${message.toolName ?? ""}:${contentKey(message.content)}`;
     case "compactionSummary":

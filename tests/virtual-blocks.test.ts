@@ -7,7 +7,7 @@ vi.mock("@earendil-works/pi-ai/compat", () => ({ completeSimple: (...args: unkno
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { projectVirtualBlocks } from "../src/context-projector.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, relieveContextPressure, selectExactEvidence } from "../src/virtual-blocks.ts";
-import { projectVirtualBlocksWithInfo } from "../src/context-projector.ts";
+import { entryRangeCanBeReplaced, projectVirtualBlocksWithInfo } from "../src/context-projector.ts";
 import { MIN_RANGE_RAW_TOKENS, selectCompressibleRange } from "../src/range-selector.ts";
 import { estimateTextTokens } from "../src/utils.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -392,6 +392,74 @@ describe("virtual range compression", () => {
     const result = projectVirtualBlocks(raw, entries, [block("u1", "a1")]);
     expect(result).toHaveLength(2);
     expect(JSON.stringify(result[0])).toContain("completed phase summary");
+  });
+
+  it("still projects after a session repair inserted reasoning blocks into assistant turns", () => {
+    // Regression test for a real production symptom: "N stored context summaries
+    // no longer match this session's history". A session-repair tool (pi-m3fix)
+    // inserts a synthetic thinking block before an assistant reply. Identity
+    // used to include reasoning parts, so the repaired turn stopped matching
+    // its stored copy and every affected summary was stranded permanently.
+    const entries = [message("u1", "user", "first"), message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const raw = entries.map((entry) => {
+      const live = (entry as any).message as AgentMessage;
+      if (live.role !== "assistant") return live;
+      return { ...live, content: [{ type: "thinking", thinking: "recovered", signature: "sig" }, ...live.content] };
+    }) as AgentMessage[];
+    const result = projectVirtualBlocks(raw, entries, [block("u1", "a1")]);
+    expect(result).toHaveLength(2);
+    expect(JSON.stringify(result[0])).toContain("completed phase summary");
+    expect(JSON.stringify(result[1])).toContain("current");
+  });
+
+  it("treats reasoning-only differences as the same turn in both directions", () => {
+    // Stored copy has the thinking block, live copy does not (redaction).
+    const entries = [
+      message("u1", "user", "first"),
+      { type: "message", id: "a1", parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "thinking", thinking: "t", signature: "s" }, { type: "text", text: "done" }], timestamp: Date.now() } } as unknown as SessionEntry,
+      message("u2", "user", "current"),
+    ];
+    const raw = [
+      (entries[0] as any).message,
+      { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: Date.now() },
+      (entries[2] as any).message,
+    ] as AgentMessage[];
+    const result = projectVirtualBlocks(raw, entries, [block("u1", "a1")]);
+    expect(result).toHaveLength(2);
+    expect(JSON.stringify(result[0])).toContain("completed phase summary");
+  });
+
+  it("never offers an active-prefix cut that would split a parallel tool-call group", () => {
+    // One assistant message issues two tool calls; their results arrive as
+    // separate entries. Cutting between them would leave call tc2 inside the
+    // summarized range and its result outside, which the projector must reject -
+    // so such a block could never be applied and its summary call is wasted.
+    const entries = [
+      message("u1", "user", "current request"),
+      { type: "message", id: "a1", parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "a" } }, { type: "toolCall", id: "tc2", name: "read", arguments: { path: "b" } }], timestamp: Date.now() } } as unknown as SessionEntry,
+      toolResult("tc1", "first result " + "x".repeat(30_000)),
+      toolResult("tc2", "second result " + "y".repeat(30_000)),
+      message("a2", "assistant", "more " + "z".repeat(30_000)),
+      toolResult("tc3", "third result"),
+    ];
+    // Only a cut immediately after tc1's result leaves a large enough raw
+    // suffix, and that cut is exactly the illegal one.
+    const range = selectCompressibleRange(entries, [], 60_000, 60_000, 13_000, true, 0);
+    expect(range).toBeUndefined();
+  });
+
+  it("agrees between creation-time and projection-time replaceability", () => {
+    const entries = [
+      message("u1", "user", "first"),
+      { type: "message", id: "a1", parentId: null, timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }], timestamp: Date.now() } } as unknown as SessionEntry,
+      toolResult("tc1", "result"),
+      message("u2", "user", "current"),
+    ];
+    // Splitting the pair is refused; covering it whole is allowed.
+    expect(entryRangeCanBeReplaced(entries, "u1", "a1")).toBe(false);
+    expect(entryRangeCanBeReplaced(entries, "u1", "tc1")).toBe(true);
+    // An unknown range is refused rather than assumed safe.
+    expect(entryRangeCanBeReplaced(entries, "nope", "tc1")).toBe(false);
   });
 
   it("maps duplicate identical messages by chronological position, not first match", () => {
