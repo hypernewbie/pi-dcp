@@ -71,6 +71,16 @@ async function handleVirtualCompact(
     notify(ctx, state.config, "Compact does not interrupt a running task; the _continue variant is a no-op here.", "info");
   }
   if (state.triggerState.isCompacting) return;
+  // Defer mid-run rather than race the live turn. Running inline would mean
+  // the relief's summarizer calls share the run's abort signal (ESC kills the
+  // user's compact with a misleading "no work available" message) and the next
+  // contiguous tool/result boundary may not be safe to cut across until the
+  // turn actually ends.
+  if (!ctx.isIdle()) {
+    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined };
+    notify(ctx, state.config, "Agent is busy; compact will run at the end of the current step.", "info");
+    return;
+  }
   state.triggerState.isCompacting = true;
   setCompactingWorking(ctx, true);
   try {

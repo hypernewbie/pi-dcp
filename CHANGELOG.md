@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.3
+
+- `/dcp compact` typed while the agent is mid-run no longer races the live turn. The compact is now deferred to the next `turn_end` (with a clear "will run at the end of the current step" notice) so the summarizer calls cannot share the run's abort signal and misreport "no work available" when the user hits ESC.
+
 ## 0.8.2
 
 - The footer and `/dcp status` now reflect the actual projected context size immediately after a successful `/dcp compact`. Previously the projection state was only refreshed on the next provider request, so a successful manual compact looked like it did nothing.

@@ -208,6 +208,78 @@ describe("extension entry point", () => {
     }
   });
 
+  it("/dcp compact typed while the agent is mid-run is deferred to the next turn_end, not run inline", async () => {
+    // Regression test for Fix 3: Pi executes extension commands during streaming,
+    // so /dcp compact typed mid-run ran inline. The relief's summarizer calls
+    // shared the live run's abort signal, so ESC aborted the user's compact
+    // with a misleading "no work available" message, and the relief raced
+    // the live run. With the fix, a mid-run compact is deferred and consumed
+    // at the next turn_end.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const bigText = "x".repeat(200_000);
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: bigText }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+
+    // Mocked ctx reports busy for the user's /dcp compact, then idle for the
+    // next turn_end so the deferred compact can consume.
+    let idle = false;
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 900_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      isIdle: () => idle,
+      hasPendingMessages: () => false,
+      compact: function () { (ctx as any).compactCallCount = ((ctx as any).compactCallCount ?? 0) + 1; },
+      model: { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" },
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      signal: undefined,
+      getThinkingLevel: () => "off",
+    };
+
+    try {
+      for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+      const dcpCommand = commands.find((c) => c.name === "dcp")!;
+
+      // Agent is mid-run. /dcp compact must defer, not run inline.
+      idle = false;
+      notifiedMessages.length = 0;
+      await dcpCommand.handler!("compact", ctx);
+
+      const deferredNotices = notifiedMessages.filter((m) => m.includes("end of the current step"));
+      expect(deferredNotices.length).toBe(1);
+
+      // The summarizer must NOT have been called yet - the relief was deferred.
+      expect(completeSimpleMock.mock.calls.length).toBe(0);
+
+      // Now the turn ends and the agent becomes idle. The deferred compact is
+      // consumed from turn_end before the auto-trigger runs.
+      idle = true;
+      for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+
+      // The deferred compact ran.
+      expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      completeSimpleMock.mockReset();
+    }
+  });
+
   it("persists a durable compaction receipt entry instead of a transient notify", async () => {
     // Regression test for a real bug: ctx.ui.notify() renders a transient status
     // line that gets wiped the instant Pi rebuilds the chat transcript from
@@ -556,6 +628,7 @@ describe("extension entry point", () => {
       model: undefined,
       compact,
       getThinkingLevel: () => "off",
+      isIdle: () => true,
     };
     for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
     for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);

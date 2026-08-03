@@ -215,6 +215,12 @@ export interface TriggerState {
   pendingInitiator: CompactionInitiator | null;
   /** True only when the pending trigger carries an explicit user-supplied focus string. */
   pendingFocusIsExplicit: boolean;
+  /**
+   * Deferred `/dcp compact` requested while the agent was mid-run. Run from
+   * the next turn_end instead of concurrently with the live turn, so ESC
+   * cannot abort the user's summarizer calls and racing the run is impossible.
+   */
+  pendingManualCompact?: { focus: string | undefined };
   lastCompaction?: LastCompactionInfo;
 }
 

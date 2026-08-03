@@ -19,7 +19,7 @@ import { notify, debug, setCompactingWorking } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import { rebuildVirtualBlocks, relieveContextPressure, retireVirtualBlock } from "./virtual-blocks.ts";
 import { installVirtualContextUsage, type VirtualUsageRef } from "./context-magic.ts";
-import { projectVirtualBlocksWithInfo, measureProjectedTokens } from "./context-projector.ts";
+import { projectVirtualBlocksWithInfo, measureProjectedTokens, refreshProjectedContext } from "./context-projector.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
 import type { CompactionInitiator } from "./types.ts";
 
@@ -119,6 +119,69 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   // bounded summary block and never starts Pi's aborting compaction primitive.
   pi.on("turn_end", async (_event, ctx) => {
     if (!state.config.enabled || !state.config.triggers.endOfTurn.enabled || !state.config.contextRelief.enabled) return;
+
+    // A /dcp compact requested while the agent was mid-run is deferred to
+    // here so it runs after the active turn completes, not concurrently with
+    // it. Consume it before the auto-trigger: this turn does the user's work
+    // first, and the auto-trigger resumes on the next turn_end after cooldown.
+    const pendingManual = state.triggerState.pendingManualCompact;
+    if (pendingManual) {
+      state.triggerState.pendingManualCompact = undefined;
+      if (state.triggerState.isCompacting) return;
+      const usage = ctx.getContextUsage();
+      if (usage && usage.tokens !== null) {
+        state.triggerState.isCompacting = true;
+        setCompactingWorking(ctx, true);
+        try {
+          state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
+          const threshold = resolveEffectiveThreshold(
+            state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
+            state.config.triggers.endOfTurn.tokenThresholdAbsolute,
+            usage.contextWindow,
+          );
+          const freeTarget = usage.tokens != null && threshold !== null
+            ? Math.max(0, usage.tokens - threshold) + state.config.contextRelief.targetHeadroomTokens
+            : state.config.contextRelief.targetHeadroomTokens;
+          const relief = await relieveContextPressure(
+            pi,
+            ctx,
+            state.config,
+            state.protection,
+            state.virtualBlocks,
+            pendingManual.focus,
+            pi.getThinkingLevel(),
+            freeTarget,
+            state.config.notification !== "off",
+          );
+          if (relief.created.length === 0) {
+            state.triggerState.tokensAtLastCompaction = usage.tokens;
+            notify(ctx, state.config, "No completed work was available to compact.", "info");
+          } else {
+            state.triggerState.turnsSinceCompaction = 0;
+            const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage.contextWindow);
+            const projectedAfter = refresh.projectedTokens > 0 ? refresh.projectedTokens : usage.tokens;
+            state.lastProjection = {
+              projectedTokens: projectedAfter,
+              contextWindow: usage.contextWindow,
+              appliedBlocks: refresh.appliedBlocks,
+              timestamp: Date.now(),
+            };
+            projectionRef.current = state.lastProjection;
+            state.triggerState.tokensAtLastCompaction = projectedAfter;
+            notify(
+              ctx,
+              state.config,
+              `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`,
+              "info",
+            );
+          }
+        } finally {
+          setCompactingWorking(ctx, false);
+          state.triggerState.isCompacting = false;
+        }
+      }
+      return;
+    }
 
     const usage = ctx.getContextUsage();
     if (!usage || usage.tokens === null) return;
