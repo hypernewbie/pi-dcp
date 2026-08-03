@@ -208,6 +208,80 @@ describe("extension entry point", () => {
     }
   });
 
+  it("/dcp compress mid-run deferred to turn_end: creates virtual blocks THEN aborts (no race)", async () => {
+    // The fix: /dcp compress must NOT race the live run. It creates virtual
+    // blocks first (via the existing context magic), persists them, and only
+    // THEN calls ctx.compact() to abort. The virtual blocks survive the abort
+    // (they're custom entries) and are projected in via the context hook for
+    // the next request. If the order were reversed (abort first, blocks after),
+    // the blocks would be useless - they'd be created against a session state
+    // that's already been compacted.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const bigText = "x".repeat(200_000);
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: bigText }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+
+    let idle = false;
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 900_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      isIdle: () => idle,
+      hasPendingMessages: () => false,
+      compact: function (opts: any) {
+        (ctx as any).compactCallCount = ((ctx as any).compactCallCount ?? 0) + 1;
+        queueMicrotask(() => opts.onComplete?.());
+      },
+      model: { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" },
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      signal: undefined,
+      getThinkingLevel: () => "off",
+    };
+
+    try {
+      for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+      const dcpCommand = commands.find((c) => c.name === "dcp")!;
+
+      // Mid-run: defer, don't race.
+      idle = false;
+      notifiedMessages.length = 0;
+      await dcpCommand.handler!("compress", ctx);
+      const deferredNotices = notifiedMessages.filter((m) => m.includes("end of the current step"));
+      expect(deferredNotices.length).toBe(1);
+      expect(completeSimpleMock.mock.calls.length).toBe(0);
+      expect((ctx as any).compactCallCount ?? 0).toBe(0);
+
+      // Turn ends: the deferred compress runs. Virtual blocks are created FIRST,
+      // then ctx.compact() aborts. The order is critical - blocks must be
+      // persisted before the abort so they survive compaction.
+      idle = true;
+      for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+
+      // Both ran: the summarizer (to create blocks) AND the abort.
+      expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+      expect((ctx as any).compactCallCount).toBe(1);
+    } finally {
+      completeSimpleMock.mockReset();
+    }
+  });
+
   it("/dcp compact typed while the agent is mid-run is deferred to the next turn_end, not run inline", async () => {
     // Regression test for Fix 3: Pi executes extension commands during streaming,
     // so /dcp compact typed mid-run ran inline. The relief's summarizer calls
@@ -280,10 +354,10 @@ describe("extension entry point", () => {
     }
   });
 
-  it("/dcp compress warns when active blocks exist (they will be discarded)", async () => {
-    // Honest warning: /dcp compress is Pi's aborting one-shot compaction. It
-    // re-summarizes raw history and discards any virtual blocks that /dcp
-    // compact had built, so the user should know before the fact.
+  it("/dcp compress warns when active blocks exist (they may be retired by the abort)", async () => {
+    // Honest warning: /dcp compress creates virtual blocks then aborts the
+    // run. Pi's compaction then summarizes the raw history, which can retire
+    // existing blocks whose entry ranges are no longer in the active context.
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};
     const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
@@ -316,7 +390,7 @@ describe("extension entry point", () => {
     // No blocks yet: no warning.
     notifiedMessages.length = 0;
     await dcpCommand.handler!("compress", ctx);
-    const noBlockNotices = notifiedMessages.filter((m) => m.includes("prior"));
+    const noBlockNotices = notifiedMessages.filter((m) => m.includes("existing") && m.includes("retired"));
     expect(noBlockNotices.length).toBe(0);
 
     // Plant a fake active block in state and run compress again.
@@ -367,7 +441,7 @@ describe("extension entry point", () => {
     // Verify by calling /dcp compress and checking the warning.
     notifiedMessages.length = 0;
     await dcpCommand.handler!("compress", ctx);
-    const blockPresentNotices = notifiedMessages.filter((m) => m.includes("prior") && m.includes("discarded"));
+    const blockPresentNotices = notifiedMessages.filter((m) => m.includes("existing") && m.includes("retired"));
     expect(blockPresentNotices.length).toBe(1);
   });
   it("persists a durable compaction receipt entry instead of a transient notify", async () => {

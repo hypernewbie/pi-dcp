@@ -1,4 +1,4 @@
-import type { ExtensionCommandContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ExtensionContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveEffectiveThreshold } from "./config.ts";
 import { triggerCompaction, resetTriggerState } from "./triggers.ts";
 import { notify, setCompactingWorking } from "./ui.ts";
@@ -25,9 +25,9 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState, projecti
         case "compact_continue":
           return handleVirtualCompact(pi, ctx, state, projectionRef, restArgs, true);
         case "compress":
-          return handleCompact(pi, ctx, state, restArgs, false);
+          return handleCompact(pi, ctx, state, projectionRef, restArgs, false);
         case "compress_continue":
-          return handleCompact(pi, ctx, state, restArgs, true);
+          return handleCompact(pi, ctx, state, projectionRef, restArgs, true);
         case "threshold":
           return handleThreshold(ctx, state, restArgs);
         case "enable":
@@ -77,7 +77,7 @@ async function handleVirtualCompact(
   // contiguous tool/result boundary may not be safe to cut across until the
   // turn actually ends.
   if (!ctx.isIdle()) {
-    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined };
+    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: false };
     notify(ctx, state.config, "Agent is busy; compact will run at the end of the current step.", "info");
     return;
   }
@@ -137,6 +137,7 @@ async function handleCompact(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   state: RuntimeState,
+  projectionRef: VirtualUsageRef,
   args: string,
   forceContinue: boolean,
 ): Promise<void> {
@@ -144,20 +145,90 @@ async function handleCompact(
     notify(ctx, state.config, "pi-dcp is disabled", "warning");
     return;
   }
-  // Honest warning: /dcp compress is Pi's aborting one-shot compaction. It
-  // re-summarizes the raw history (Pi's compaction does not run the context
-  // hook), so any active virtual blocks are discarded and the summaries they
-  // built are wasted. Tell the user before the fact so the choice is visible.
+  // Honest warning: compress creates virtual blocks then aborts the run. Pi's
+  // compaction then summarizes the raw history, which can retire existing blocks
+  // whose entry ranges are no longer in the active context. Tell the user.
   if (state.virtualBlocks.length > 0) {
     const count = state.virtualBlocks.length;
     notify(
       ctx,
       state.config,
-      `${count} prior ${count === 1 ? "summary" : "summaries"} from /dcp compact will be discarded by this compress. Use /dcp compact to add more without losing them.`,
+      `${count} existing ${count === 1 ? "summary" : "summaries"} may be retired by this compress.`,
       "warning",
     );
   }
-  const focus = args.trim() || undefined;
+  // /dcp compress must NOT race the live run. If the agent is mid-run, defer
+  // to the next turn_end (it will create virtual blocks then abort cleanly).
+  if (!ctx.isIdle()) {
+    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: true };
+    notify(ctx, state.config, "Agent is busy; compress will run at the end of the current step.", "info");
+    return;
+  }
+  await runCompressWithVirtualBlocks(pi, ctx, state, projectionRef, args.trim() || undefined, forceContinue);
+}
+
+/**
+ * Create virtual blocks from the current history, then call ctx.compact()
+ * (which aborts the live run). The virtual blocks are persisted as custom
+ * session entries BEFORE the abort, so they survive the compaction and are
+ * still projected in via the context hook for the next request - the surgical
+ * part of OpenCode DCP. The abort is Pi's one-shot compaction with DCP's
+ * structured custom summary. forceContinue controls whether the interrupted
+ * run is resumed after the compaction completes.
+ */
+export async function runCompressWithVirtualBlocks(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  state: RuntimeState,
+  projectionRef: VirtualUsageRef,
+  focus: string | undefined,
+  forceContinue: boolean,
+): Promise<void> {
+  if (state.triggerState.isCompacting) return;
+  state.triggerState.isCompacting = true;
+  setCompactingWorking(ctx, true);
+  try {
+    state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
+    const usage = ctx.getContextUsage();
+    const threshold = resolveEffectiveThreshold(
+      state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
+      state.config.triggers.endOfTurn.tokenThresholdAbsolute,
+      usage?.contextWindow ?? 0,
+    );
+    const freeTarget = usage?.tokens != null && threshold !== null
+      ? Math.max(0, usage.tokens - threshold) + state.config.contextRelief.targetHeadroomTokens
+      : state.config.contextRelief.targetHeadroomTokens;
+    const relief = await relieveContextPressure(
+      pi,
+      ctx,
+      state.config,
+      state.protection,
+      state.virtualBlocks,
+      focus,
+      pi.getThinkingLevel(),
+      freeTarget,
+      state.config.notification !== "off",
+    );
+    if (relief.created.length > 0) {
+      const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage?.contextWindow ?? 0);
+      if (refresh.projectedTokens > 0) {
+        state.lastProjection = {
+          projectedTokens: refresh.projectedTokens,
+          contextWindow: usage?.contextWindow ?? 0,
+          appliedBlocks: refresh.appliedBlocks,
+          timestamp: Date.now(),
+        };
+        projectionRef.current = state.lastProjection;
+        state.triggerState.tokensAtLastCompaction = refresh.projectedTokens;
+      }
+      notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
+    }
+  } finally {
+    setCompactingWorking(ctx, false);
+    state.triggerState.isCompacting = false;
+  }
+  // Now abort the run. The virtual blocks are already persisted and survive
+  // the compaction; the context hook projects them in for the next request.
   triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command", { forceContinue });
 }
 

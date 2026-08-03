@@ -207,11 +207,14 @@ export interface TriggerState {
   /** True only when the pending trigger carries an explicit user-supplied focus string. */
   pendingFocusIsExplicit: boolean;
   /**
-   * Deferred `/dcp compact` requested while the agent was mid-run. Run from
-   * the next turn_end instead of concurrently with the live turn, so ESC
-   * cannot abort the user's summarizer calls and racing the run is impossible.
+   * Deferred manual compaction action requested while the agent was mid-run.
+   * Run from the next turn_end instead of concurrently with the live turn, so
+   * ESC cannot abort the user's summarizer calls and racing the run is impossible.
+   * When `compressAfter` is true, the deferred consumer also calls ctx.compact()
+   * after the virtual blocks are created, so /dcp compress pauses the run
+   * cleanly (instead of racing it) and then stops or resumes per the variant.
    */
-  pendingManualCompact?: { focus: string | undefined };
+  pendingManualCompact?: { focus: string | undefined; compressAfter: boolean };
   lastCompaction?: LastCompactionInfo;
 }
 

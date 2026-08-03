@@ -127,6 +127,23 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const pendingManual = state.triggerState.pendingManualCompact;
     if (pendingManual) {
       state.triggerState.pendingManualCompact = undefined;
+      // /dcp compress (deferred mid-run): create virtual blocks then abort the
+      // run via ctx.compact(). The blocks are persisted before the abort, so
+      // they survive the compaction and are projected in via the context hook
+      // for the next request. The variant (compress vs compress_continue)
+      // controls whether the interrupted run resumes after the abort.
+      if (pendingManual.compressAfter) {
+        const { runCompressWithVirtualBlocks } = await import("./commands.ts");
+        await runCompressWithVirtualBlocks(
+          pi,
+          ctx,
+          state,
+          projectionRef,
+          pendingManual.focus,
+          false,
+        );
+        return;
+      }
       if (state.triggerState.isCompacting) return;
       const usage = ctx.getContextUsage();
       if (usage && usage.tokens !== null) {

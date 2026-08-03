@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.6
+
+- `/dcp compress` now creates virtual blocks FIRST and THEN calls `ctx.compact()` to abort the run. Previously compress raced the live run (the summarizer calls happened concurrently with the user's active tool calls). The new flow avoids the race by deferring to the next `turn_end` when the agent is mid-run, then creating the virtual blocks (the "context magic" - virtual blocks + context hook projection) before aborting. The blocks are persisted as custom entries and survive the compaction, so they're projected in via the context hook for the next request. This is the "surgical" version of compress: only the old parts are summarized, the recent active work is kept raw.
+
 ## 0.8.5
 
 - `/dcp compress` now warns the user when active virtual blocks exist, because the compress primitive runs Pi's aborting one-shot compaction which re-summarizes raw history and discards every block that `/dcp compact` had built. The warning makes the cost visible before the fact instead of silently wasting summaries.
