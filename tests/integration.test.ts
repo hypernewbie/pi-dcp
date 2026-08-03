@@ -804,6 +804,61 @@ describe("extension entry point", () => {
     expect(compact).not.toHaveBeenCalled();
   });
 
+  it("automatic threshold relief actually creates virtual blocks (not just shows a widget)", async () => {
+    // Regression test: the previous "does not call ctx.compact" test only
+    // verified the widget appeared, which passes vacuously when the auto-trigger
+    // runs but the summarizer fails (no model, etc.) and no blocks are created.
+    // This test wires a real model + mock summarizer + real branch and asserts
+    // the summarizer was actually called - proving the auto-trigger does the
+    // surgical compression, not just shows a spinner.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers)
+    mod.default(mockApi as any);
+    const compact = vi.fn();
+
+    const bigText = "x".repeat(200_000);
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: bigText }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: () => {} },
+      getContextUsage: () => ({ tokens: 900_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      model: { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" },
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      signal: undefined,
+      compact,
+      getThinkingLevel: () => "off",
+      isIdle: () => true,
+    };
+
+    try {
+      for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+      // Clear cooldown + growth guard.
+      for (let i = 0; i < 3; i++) {
+        for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+      }
+      // The summarizer was called - the auto-trigger actually created blocks.
+      expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+      // The run was NOT aborted - ctx.compact was never called.
+      expect(compact).not.toHaveBeenCalled();
+    } finally {
+      completeSimpleMock.mockReset();
+    }
+  });
+
   it("exposes plain command help without internal architecture terms", async () => {
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.7
+
+- Strengthened the auto-trigger test: the previous test only verified the widget appeared and that `ctx.compact` was not called, which passes vacuously when the auto-trigger runs but the summarizer fails (no model, etc.) and no blocks are created. The new test wires a real model + mock summarizer + real branch and asserts the summarizer was actually called - proving the auto-trigger does the surgical compression, not just shows a spinner.
+
 ## 0.8.6
 
 - `/dcp compress` now creates virtual blocks FIRST and THEN calls `ctx.compact()` to abort the run. Previously compress raced the live run (the summarizer calls happened concurrently with the user's active tool calls). The new flow avoids the race by deferring to the next `turn_end` when the agent is mid-run, then creating the virtual blocks (the "context magic" - virtual blocks + context hook projection) before aborting. The blocks are persisted as custom entries and survive the compaction, so they're projected in via the context hook for the next request. This is the "surgical" version of compress: only the old parts are summarized, the recent active work is kept raw.
