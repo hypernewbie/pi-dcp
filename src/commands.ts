@@ -5,6 +5,7 @@ import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
 import { rebuildVirtualBlocks, relieveContextPressure } from "./virtual-blocks.ts";
+import { measureProjectedTokens } from "./context-projector.ts";
 import { isVirtualContextUsageInstalled } from "./context-magic.ts";
 
 export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
@@ -97,7 +98,12 @@ async function handleVirtualCompact(
       return;
     }
     state.triggerState.turnsSinceCompaction = 0;
-    state.triggerState.tokensAtLastCompaction = ctx.getContextUsage()?.tokens ?? null;
+    // Record the projected (post-relief) token count, not the pre-relief
+    // reading. The growth-throttle re-trigger guard compares against this
+    // number; recording the pre-relief number opens a dead band where Pi's
+    // own aborting compaction can fire instead of DCP.
+    const projectedAfter = measureProjectedTokens(ctx.sessionManager.getBranch(), state.virtualBlocks);
+    state.triggerState.tokensAtLastCompaction = projectedAfter > 0 ? projectedAfter : null;
     notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
   } finally {
     setCompactingWorking(ctx, false);

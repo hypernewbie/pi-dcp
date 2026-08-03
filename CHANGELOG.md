@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1
+
+- Fixed the dead band that allowed Pi's aborting native compaction to win over DCP. After a successful relief pass, the recorded token count is now the projected (post-relief) figure, not the pre-relief usage reading. The growth-throttle re-trigger guard compares against this number; with the pre-relief value, the next pass would be blocked until context grew past pre-relief + 5% of threshold, opening a window where Pi's own task-aborting compaction could fire instead of DCP.
+
 ## 0.8.0
 
 - **Fixed the real cause of "N stored context summaries no longer match this session's history".** Message identity included model reasoning/thinking parts, so any turn whose reasoning was rewritten stopped matching its stored copy and every summary covering it was stranded permanently. Reasoning content carries no conversational meaning and is now excluded from identity. This specifically repairs sessions repaired by a reasoning-repair tool (which inserts a thinking block before an existing reply) and any provider that varies or redacts reasoning.

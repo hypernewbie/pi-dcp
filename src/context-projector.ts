@@ -107,6 +107,41 @@ export function projectVirtualBlocks(
   return projectVirtualBlocksWithInfo(contextMessages, contextEntries, blocks).messages;
 }
 
+/**
+ * Measure the projected token count of the next request after applying the
+ * given blocks to the given branch. Used after a relief pass to record what
+ * the provider actually receives, so the growth-throttle re-trigger guard
+ * doesn't compare a new raw measurement against a stale pre-relief number.
+ * Returns 0 when the branch cannot be projected.
+ */
+export function measureProjectedTokens(
+  branch: readonly SessionEntry[],
+  blocks: readonly VirtualCompressionBlock[],
+): number {
+  try {
+    const contextMessages: AgentMessage[] = [];
+    for (const entry of branch) {
+      for (const message of sessionEntryToContextMessages(entry)) contextMessages.push(message);
+    }
+    const projected = projectVirtualBlocksWithInfo(contextMessages, branch, blocks);
+    let total = 0;
+    for (const message of projected.messages) {
+      total += estimateMessageTokens(message);
+    }
+    return total;
+  } catch {
+    return 0;
+  }
+}
+
+function estimateMessageTokens(message: AgentMessage): number {
+  try {
+    return JSON.stringify(message).length / 4;
+  } catch {
+    return 0;
+  }
+}
+
 export function makeBlockMessage(block: VirtualCompressionBlock): AgentMessage {
   return {
     role: "user",

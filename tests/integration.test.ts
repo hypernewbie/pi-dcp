@@ -3,6 +3,11 @@ import { resolve } from "node:path";
 
 const EXTENSION_PATH = resolve(import.meta.dirname, "../src/index.ts");
 
+const completeSimpleMock = vi.fn();
+vi.mock("@earendil-works/pi-ai/compat", () => ({
+  completeSimple: (...args: unknown[]) => completeSimpleMock(...args),
+}));
+
 function makeMockApi(hooks: Record<string, Function[]>, commands: Array<{ name: string; description?: string }>, entryRenderers: Map<string, Function>) {
   return {
     registerCommand: (name: string, options: any) => commands.push({ name, ...options }),
@@ -55,6 +60,83 @@ describe("extension entry point", () => {
     expect(hookEvents).toContain("session_before_compact");
 
     expect(entryRenderers.has("dcp-receipt")).toBe(true);
+  });
+
+  it("after a successful relief, the growth-throttle re-trigger uses the projected (post-relief) count, not the pre-relief one", async () => {
+    // Regression test for a real failure: after a successful /dcp compact,
+    // tokensAtLastCompaction was recorded as the PRE-relief usage reading.
+    // The growth-throttle re-trigger guard compares against this number, so
+    // the next pass would be blocked until context grew past pre-relief +
+    // 5%*threshold, opening a dead band where Pi's aborting native compaction
+    // could fire instead of DCP - the exact thing DCP exists to prevent.
+    //
+    // Setup: window 1_000_000, threshold percent 73% (~730K). Pre-relief
+    // usage 900K. After relief, projected usage ~100K. The next turn_end
+    // reports usage 750K - just above threshold but well below pre-relief.
+    // A correct fix re-triggers; the bug blocks re-trigger indefinitely.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    // Branch big enough to compress, with a current user message at the end.
+    const bigText = "x".repeat(200_000);
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: bigText }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+
+    let currentTokens = 900_000;
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: () => {} },
+      getContextUsage: () => ({ tokens: currentTokens, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: function () { (ctx as any).compactCallCount = ((ctx as any).compactCallCount ?? 0) + 1; },
+      model: { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" },
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      signal: undefined,
+      getThinkingLevel: () => "off",
+    };
+
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+
+    try {
+      for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+      // First relief: usage 900K, well above threshold. Three turn_ends to clear
+      // the cooldown and get past the growth-throttle (which compares against
+      // tokensAtLastCompaction = null at this point).
+      for (let i = 0; i < 3; i++) {
+        for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+      }
+      const firstPassSummarizerCalls = completeSimpleMock.mock.calls.length;
+      expect(firstPassSummarizerCalls).toBeGreaterThan(0);
+
+      // After relief, the projection should be much smaller than the pre-relief
+      // 900K. Now advance the clock past the cooldown and report usage 750K -
+      // just above threshold (730K) but far below pre-relief (900K). With the
+      // bug, tokensAtLastCompaction is recorded as 900K, so the next trigger
+      // requires usage >= 900K + 5%*730K ~= 936K and won't fire. With the fix,
+      // tokensAtLastCompaction is the projected value (~100K), so the next
+      // trigger fires the moment usage crosses 730K + 5%*730K ~= 766K.
+      currentTokens = 750_000;
+      for (let i = 0; i < 3; i++) {
+        for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+      }
+      // Bug: summarizerCalls remains at firstPassSummarizerCalls. Fix: it grew.
+      expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(firstPassSummarizerCalls);
+    } finally {
+      completeSimpleMock.mockReset();
+    }
   });
 
   it("persists a durable compaction receipt entry instead of a transient notify", async () => {

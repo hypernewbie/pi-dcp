@@ -19,7 +19,7 @@ import { notify, debug, setCompactingWorking } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import { rebuildVirtualBlocks, relieveContextPressure, retireVirtualBlock } from "./virtual-blocks.ts";
 import { installVirtualContextUsage, type VirtualUsageRef } from "./context-magic.ts";
-import { projectVirtualBlocksWithInfo } from "./context-projector.ts";
+import { projectVirtualBlocksWithInfo, measureProjectedTokens } from "./context-projector.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
 import type { CompactionInitiator } from "./types.ts";
 
@@ -156,7 +156,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         return;
       }
       state.triggerState.turnsSinceCompaction = 0;
-      state.triggerState.tokensAtLastCompaction = usage.tokens;
+      // Record the projected (post-relief) token count, not the pre-relief
+      // usage reading. The growth-throttle re-trigger guard compares against
+      // this number; if we stored the pre-relief number, the next pass would
+      // be blocked until usage grew past pre-relief + 5%*threshold, opening a
+      // dead band where Pi's own aborting compaction can fire instead of DCP.
+      const projectedAfter = measureProjectedTokens(ctx.sessionManager.getBranch(), state.virtualBlocks);
+      state.triggerState.tokensAtLastCompaction = projectedAfter > 0 ? projectedAfter : usage.tokens;
       debug(ctx, state.config, `Compacted ${relief.created.length} range(s), ~${relief.freedTokens.toLocaleString()} tokens freed`);
     } finally {
       setCompactingWorking(ctx, false);
