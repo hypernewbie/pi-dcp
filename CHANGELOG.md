@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- The footer and `/dcp status` now reflect the actual projected context size immediately after a successful `/dcp compact`. Previously the projection state was only refreshed on the next provider request, so a successful manual compact looked like it did nothing.
+
 ## 0.8.1
 
 - Fixed the dead band that allowed Pi's aborting native compaction to win over DCP. After a successful relief pass, the recorded token count is now the projected (post-relief) figure, not the pre-relief usage reading. The growth-throttle re-trigger guard compares against this number; with the pre-relief value, the next pass would be blocked until context grew past pre-relief + 5% of threshold, opening a window where Pi's own task-aborting compaction could fire instead of DCP.

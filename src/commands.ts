@@ -5,10 +5,11 @@ import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
 import { rebuildVirtualBlocks, relieveContextPressure } from "./virtual-blocks.ts";
-import { measureProjectedTokens } from "./context-projector.ts";
+import { measureProjectedTokens, refreshProjectedContext } from "./context-projector.ts";
 import { isVirtualContextUsageInstalled } from "./context-magic.ts";
+import type { VirtualUsageRef } from "./context-magic.ts";
 
-export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
+export function registerCommands(pi: ExtensionAPI, state: RuntimeState, projectionRef: VirtualUsageRef): void {
   pi.registerCommand("dcp", {
     description: "pi-dcp: dynamic context pruning commands",
     handler: async (args, ctx) => {
@@ -20,9 +21,9 @@ export function registerCommands(pi: ExtensionAPI, state: RuntimeState): void {
 
       switch (lc) {
         case "compact":
-          return handleVirtualCompact(pi, ctx, state, restArgs, false);
+          return handleVirtualCompact(pi, ctx, state, projectionRef, restArgs, false);
         case "compact_continue":
-          return handleVirtualCompact(pi, ctx, state, restArgs, true);
+          return handleVirtualCompact(pi, ctx, state, projectionRef, restArgs, true);
         case "compress":
           return handleCompact(pi, ctx, state, restArgs, false);
         case "compress_continue":
@@ -54,6 +55,7 @@ async function handleVirtualCompact(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   state: RuntimeState,
+  projectionRef: VirtualUsageRef,
   args: string,
   continueRequested: boolean,
 ): Promise<void> {
@@ -101,9 +103,19 @@ async function handleVirtualCompact(
     // Record the projected (post-relief) token count, not the pre-relief
     // reading. The growth-throttle re-trigger guard compares against this
     // number; recording the pre-relief number opens a dead band where Pi's
-    // own aborting compaction can fire instead of DCP.
-    const projectedAfter = measureProjectedTokens(ctx.sessionManager.getBranch(), state.virtualBlocks);
-    state.triggerState.tokensAtLastCompaction = projectedAfter > 0 ? projectedAfter : null;
+    // own aborting compaction can fire instead of DCP. Also refresh the
+    // projection state so the patched getContextUsage() and /dcp status
+    // reflect the post-relief request immediately.
+    const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage?.contextWindow ?? 0);
+    const projectedAfter = refresh.projectedTokens > 0 ? refresh.projectedTokens : null;
+    state.lastProjection = refresh.projectedTokens > 0 ? {
+      projectedTokens: refresh.projectedTokens,
+      contextWindow: usage?.contextWindow ?? 0,
+      appliedBlocks: refresh.appliedBlocks,
+      timestamp: Date.now(),
+    } : undefined;
+    projectionRef.current = state.lastProjection;
+    state.triggerState.tokensAtLastCompaction = projectedAfter;
     notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
   } finally {
     setCompactingWorking(ctx, false);

@@ -134,6 +134,40 @@ export function measureProjectedTokens(
   }
 }
 
+export interface ProjectedRefreshResult {
+  projectedTokens: number;
+  appliedBlocks: number;
+  contextWindow: number;
+}
+
+/**
+ * Re-run the projection against the given branch so the next call to the
+ * patched AgentSession.getContextUsage() returns the projected figure instead
+ * of the stale pre-relief one. Returns the projected token count and the
+ * number of blocks that actually applied. Returns 0/0 when the branch cannot
+ * be projected, so the caller can fall back to the raw usage value.
+ */
+export function refreshProjectedContext(
+  branch: readonly SessionEntry[],
+  blocks: readonly VirtualCompressionBlock[],
+  contextWindow: number,
+): ProjectedRefreshResult {
+  try {
+    const contextMessages: AgentMessage[] = [];
+    for (const entry of branch) {
+      for (const message of sessionEntryToContextMessages(entry)) contextMessages.push(message);
+    }
+    const projected = projectVirtualBlocksWithInfo(contextMessages, branch, blocks);
+    let total = 0;
+    for (const message of projected.messages) {
+      total += estimateMessageTokens(message);
+    }
+    return { projectedTokens: total, appliedBlocks: projected.appliedBlocks, contextWindow };
+  } catch {
+    return { projectedTokens: 0, appliedBlocks: 0, contextWindow };
+  }
+}
+
 function estimateMessageTokens(message: AgentMessage): number {
   try {
     return JSON.stringify(message).length / 4;

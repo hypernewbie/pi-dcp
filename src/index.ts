@@ -48,7 +48,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   const RETIRE_AFTER_CONSECUTIVE_FAILURES = 2;
   installVirtualContextUsage(projectionRef);
 
-  registerCommands(pi, state);
+  registerCommands(pi, state, projectionRef);
   registerSessionReaderTool(pi);
 
   // Compaction receipts are rendered as durable custom session entries, not via

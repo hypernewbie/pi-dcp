@@ -139,6 +139,75 @@ describe("extension entry point", () => {
     }
   });
 
+  it("after /dcp compact, /dcp status reflects the projected (post-relief) count, not the stale pre-relief one", async () => {
+    // Regression test for Fix 2: before the fix, /dcp status kept showing the
+    // pre-relief percentage and the vctx line stayed stale until the next LLM
+    // request, so a successful manual compact looked like it did nothing.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const bigText = "x".repeat(200_000);
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: bigText }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 900_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: function () { (ctx as any).compactCallCount = ((ctx as any).compactCallCount ?? 0) + 1; },
+      model: { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" },
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      signal: undefined,
+      getThinkingLevel: () => "off",
+    };
+
+    try {
+      for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+      // Pre-condition: status has no vctx line before any compact.
+      const dcpCommand = commands.find((c) => c.name === "dcp")!;
+      notifiedMessages.length = 0;
+      await dcpCommand.handler!("status", ctx);
+      const preStatus = notifiedMessages.join("\n");
+      expect(preStatus).not.toContain("vctx (actual sent)");
+
+      // Run /dcp compact.
+      notifiedMessages.length = 0;
+      await dcpCommand.handler!("compact", ctx);
+
+      // Post-condition: status shows a small vctx value, NOT the pre-relief 900K.
+      notifiedMessages.length = 0;
+      await dcpCommand.handler!("status", ctx);
+      const postStatus = notifiedMessages.join("\n");
+      expect(postStatus).toContain("vctx (actual sent)");
+      // The pre-relief reading was 900K. After relief, the projected value
+      // should be well below that and well below the window.
+      const match = postStatus.match(/vctx \(actual sent\): ~([\d,.]+) tokens/);
+      expect(match).not.toBeNull();
+      const projected = Number(match![1].replace(/,/g, ""));
+      expect(projected).toBeLessThan(900_000);
+      expect(projected).toBeGreaterThan(0);
+    } finally {
+      completeSimpleMock.mockReset();
+    }
+  });
+
   it("persists a durable compaction receipt entry instead of a transient notify", async () => {
     // Regression test for a real bug: ctx.ui.notify() renders a transient status
     // line that gets wiped the instant Pi rebuilds the chat transcript from
