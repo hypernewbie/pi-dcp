@@ -144,6 +144,19 @@ async function handleCompact(
     notify(ctx, state.config, "pi-dcp is disabled", "warning");
     return;
   }
+  // Honest warning: /dcp compress is Pi's aborting one-shot compaction. It
+  // re-summarizes the raw history (Pi's compaction does not run the context
+  // hook), so any active virtual blocks are discarded and the summaries they
+  // built are wasted. Tell the user before the fact so the choice is visible.
+  if (state.virtualBlocks.length > 0) {
+    const count = state.virtualBlocks.length;
+    notify(
+      ctx,
+      state.config,
+      `${count} prior ${count === 1 ? "summary" : "summaries"} from /dcp compact will be discarded by this compress. Use /dcp compact to add more without losing them.`,
+      "warning",
+    );
+  }
   const focus = args.trim() || undefined;
   triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command", { forceContinue });
 }

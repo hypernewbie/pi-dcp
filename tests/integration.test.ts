@@ -280,6 +280,96 @@ describe("extension entry point", () => {
     }
   });
 
+  it("/dcp compress warns when active blocks exist (they will be discarded)", async () => {
+    // Honest warning: /dcp compress is Pi's aborting one-shot compaction. It
+    // re-summarizes raw history and discards any virtual blocks that /dcp
+    // compact had built, so the user should know before the fact.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const notifiedMessages: string[] = [];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notifiedMessages.push(message) },
+      getContextUsage: () => ({ tokens: 100, contextWindow: 1000 }),
+      sessionManager: { getBranch: () => [] },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: function (opts: any) {
+        (ctx as any).compactCallCount = ((ctx as any).compactCallCount ?? 0) + 1;
+        // Simulate Pi firing its onComplete callback so the trigger state is reset.
+        queueMicrotask(() => opts.onComplete?.());
+      },
+      model: undefined,
+    };
+
+    for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+    const dcpCommand = commands.find((c) => c.name === "dcp")!;
+
+    // No blocks yet: no warning.
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("compress", ctx);
+    const noBlockNotices = notifiedMessages.filter((m) => m.includes("prior"));
+    expect(noBlockNotices.length).toBe(0);
+
+    // Plant a fake active block in state and run compress again.
+    const dcpState = (await import("../src/state.ts")).createTriggerState();
+    const fakeBlock = {
+      version: 1,
+      id: "block-1",
+      startEntryId: "u1",
+      endEntryId: "a1",
+      anchorEntryId: "u1",
+      rangeKind: "historical" as const,
+      messagesCompressed: 2,
+      toolsCompressed: 0,
+      summary: "x",
+      exactEvidence: "",
+      preservedUserMessages: [],
+      estimatedRawTokens: 10,
+      retainedRawTokens: 20,
+      estimatedBlockTokens: 5,
+      active: true,
+      createdAt: Date.now(),
+    };
+    // Inject the block by setting it through the session_start → virtualBlocks rebuild.
+    // We bypass the rebuild by directly mutating state via a follow-up compact call.
+    // Instead: trigger /dcp compact first to create a real block, then /dcp compress.
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+    const bigText = "x".repeat(200_000);
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: bigText }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+    ctx.sessionManager = { getBranch: () => branch, buildContextEntries: () => branch };
+    ctx.getContextUsage = () => ({ tokens: 900_000, contextWindow: 1_000_000 });
+    ctx.model = { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" };
+    ctx.modelRegistry = { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) };
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("compress", ctx);
+    // compress aborted with no model, so no block was created. We need to
+    // run /dcp compact with a mocking summarizer to actually create a block.
+    void fakeBlock; // referenced for documentation; the real block comes from /dcp compact below.
+
+    // Now create a real block via /dcp compact.
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("compact", ctx);
+    // /dcp compact ran the summarizer. The branch state now has at least one block.
+    // Verify by calling /dcp compress and checking the warning.
+    notifiedMessages.length = 0;
+    await dcpCommand.handler!("compress", ctx);
+    const blockPresentNotices = notifiedMessages.filter((m) => m.includes("prior") && m.includes("discarded"));
+    expect(blockPresentNotices.length).toBe(1);
+  });
   it("persists a durable compaction receipt entry instead of a transient notify", async () => {
     // Regression test for a real bug: ctx.ui.notify() renders a transient status
     // line that gets wiped the instant Pi rebuilds the chat transcript from

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.5
+
+- `/dcp compress` now warns the user when active virtual blocks exist, because the compress primitive runs Pi's aborting one-shot compaction which re-summarizes raw history and discards every block that `/dcp compact` had built. The warning makes the cost visible before the fact instead of silently wasting summaries.
+
 ## 0.8.4
 
 - Removed the dead `triggers.endOfTurn.autoContinue` config knob. The automatic trigger no longer calls `ctx.compact()` (it folds in via the `context` hook), so the old `autoContinue`/`wasActive`/`dcp-dual-threshold` branch in `triggerCompaction` was unreachable. The only remaining way to re-prompt after a `ctx.compact()` abort is the explicit `_continue` variant (`forceContinue: true`). The forced behavior is now the only behavior; there is no longer a config knob that does nothing.
