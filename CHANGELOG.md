@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.4
+
+- Removed the dead `triggers.endOfTurn.autoContinue` config knob. The automatic trigger no longer calls `ctx.compact()` (it folds in via the `context` hook), so the old `autoContinue`/`wasActive`/`dcp-dual-threshold` branch in `triggerCompaction` was unreachable. The only remaining way to re-prompt after a `ctx.compact()` abort is the explicit `_continue` variant (`forceContinue: true`). The forced behavior is now the only behavior; there is no longer a config knob that does nothing.
+
 ## 0.8.3
 
 - `/dcp compact` typed while the agent is mid-run no longer races the live turn. The compact is now deferred to the next `turn_end` (with a clear "will run at the end of the current step" notice) so the summarizer calls cannot share the run's abort signal and misreport "no work available" when the user hits ESC.

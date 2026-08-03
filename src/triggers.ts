@@ -62,9 +62,6 @@ export function triggerCompaction(
   state.pendingInitiator = initiator;
   state.pendingFocusIsExplicit = focusIsUserSupplied;
 
-  // Snapshot now: ctx.compact() is about to abort whatever is running. If the
-  // agent was actively mid-run, remember it so we can resume it afterward.
-  const wasActive = !ctx.isIdle();
   const forceContinue = options?.forceContinue ?? false;
 
   debug(ctx, config, `Triggering compaction (initiator: ${initiator}, focus: ${focus.slice(0, 60)}...)`);
@@ -77,15 +74,10 @@ export function triggerCompaction(
       state.turnsSinceCompaction = 0;
       state.pendingInitiator = null;
 
-      // forceContinue (explicit /dcp compact_continue or /dcp compress_continue)
-      // always resumes. Otherwise, auto-continue only applies to the automatic
-      // dual-threshold trigger (gated by triggers.endOfTurn.autoContinue) - a
-      // plain manual /dcp compact or /dcp compress never auto-resumes on its
-      // own; the user asked for exactly one thing (compact) and gets exactly
-      // that, nothing more, unless they explicitly asked for the _continue variant.
-      const shouldContinue =
-        forceContinue || (initiator === "dcp-dual-threshold" && config.triggers.endOfTurn.autoContinue && wasActive);
-      if (shouldContinue && !ctx.hasPendingMessages()) {
+      // forceContinue resolves the explicit /dcp compress_continue case: the
+      // user's run was just aborted by ctx.compact() so we re-prompt to pick
+      // up where they left off. A plain /dcp compress never auto-resumes.
+      if (forceContinue && !ctx.hasPendingMessages()) {
         pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
       }
     },
@@ -111,10 +103,4 @@ export function resetTriggerState(state: TriggerState): void {
   state.pendingInitiator = null;
   state.pendingFocusIsExplicit = false;
   state.lastCompaction = undefined;
-}
-
-export function consumePendingInitiator(state: TriggerState): CompactionInitiator {
-  const pending = state.pendingInitiator ?? "pi-native";
-  state.pendingInitiator = null;
-  return pending;
 }

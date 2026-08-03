@@ -52,7 +52,6 @@ export const DEFAULT_CONFIG: DcpConfig = {
       tokenThresholdAbsolute: 450_000,
       cooldownTurns: 2,
       focus: "Preserve architecture decisions, file changes, and current task. Drop verbose logs and repeated outputs.",
-      autoContinue: true,
     },
   },
 

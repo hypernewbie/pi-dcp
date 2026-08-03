@@ -63,10 +63,10 @@ describe("shouldTriggerCompaction", () => {
 });
 
 // ctx.compact() always aborts whatever the agent is currently doing before it
-// compacts (Pi has no safe mid-loop compact-and-continue primitive). These tests
-// lock in the auto-continue safety net: if triggerCompaction() interrupted an
-// active run, it must re-prompt to resume it once compaction completes.
-describe("triggerCompaction autoContinue", () => {
+// compacts (Pi has no safe mid-loop compact-and-continue primitive). The only
+// way to re-prompt after a ctx.compact() abort is the explicit /dcp _continue
+// variants, which set forceContinue=true. Plain manual compress never resumes.
+describe("triggerCompaction forceContinue", () => {
   function makeFakes(opts: { isIdle: boolean; hasPendingMessages: boolean }) {
     let onComplete: (() => void) | undefined;
     const pi = { sendUserMessage: vi.fn() } as any;
@@ -81,15 +81,17 @@ describe("triggerCompaction autoContinue", () => {
     return { pi, ctx, complete: () => onComplete?.() };
   }
 
-  it("resends a continue prompt when it interrupted an active run", () => {
+  it("a plain manual /dcp compress never resumes, even if it interrupted an active run", () => {
+    // The user asked for exactly one thing (compact) and gets exactly that.
+    // Only the explicit _continue variant sets forceContinue.
     const { pi, ctx, complete } = makeFakes({ isIdle: false, hasPendingMessages: false });
     const state = createTriggerState();
-    triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-dual-threshold");
+    triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-command");
     complete();
-    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
   });
 
-  it("does not resend when the agent was already idle (nothing was interrupted)", () => {
+  it("does not resume when the agent was already idle and forceContinue is false", () => {
     const { pi, ctx, complete } = makeFakes({ isIdle: true, hasPendingMessages: false });
     const state = createTriggerState();
     triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-command");
@@ -97,37 +99,7 @@ describe("triggerCompaction autoContinue", () => {
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
   });
 
-  it("does not resend when the user already has a pending message queued", () => {
-    const { pi, ctx, complete } = makeFakes({ isIdle: false, hasPendingMessages: true });
-    const state = createTriggerState();
-    triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-dual-threshold");
-    complete();
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
-  });
-
-  it("does not resend when autoContinue is disabled", () => {
-    const { pi, ctx, complete } = makeFakes({ isIdle: false, hasPendingMessages: false });
-    const config = {
-      ...DEFAULT_CONFIG,
-      triggers: { endOfTurn: { ...DEFAULT_CONFIG.triggers.endOfTurn, autoContinue: false } },
-    };
-    const state = createTriggerState();
-    triggerCompaction(pi, ctx, config, state, undefined, "dcp-dual-threshold");
-    complete();
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
-  });
-
-  it("a plain manual /dcp compact never auto-continues, even if it interrupted an active run", () => {
-    // The user asked for exactly one thing (compact) and gets exactly that -
-    // autoContinue only applies to the automatic dual-threshold trigger.
-    const { pi, ctx, complete } = makeFakes({ isIdle: false, hasPendingMessages: false });
-    const state = createTriggerState();
-    triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-command");
-    complete();
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
-  });
-
-  it("/dcp compact_continue (forceContinue) always resumes, even if nothing was interrupted", () => {
+  it("forceContinue always resumes, even if nothing was interrupted", () => {
     const { pi, ctx, complete } = makeFakes({ isIdle: true, hasPendingMessages: false });
     const state = createTriggerState();
     triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-command", { forceContinue: true });
@@ -135,14 +107,10 @@ describe("triggerCompaction autoContinue", () => {
     expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("/dcp compact_continue (forceContinue) resumes even when autoContinue is globally disabled", () => {
+  it("forceContinue resumes even when the run was active", () => {
     const { pi, ctx, complete } = makeFakes({ isIdle: false, hasPendingMessages: false });
-    const config = {
-      ...DEFAULT_CONFIG,
-      triggers: { endOfTurn: { ...DEFAULT_CONFIG.triggers.endOfTurn, autoContinue: false } },
-    };
     const state = createTriggerState();
-    triggerCompaction(pi, ctx, config, state, undefined, "dcp-command", { forceContinue: true });
+    triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-command", { forceContinue: true });
     complete();
     expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
   });
