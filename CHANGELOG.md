@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.9
+
+- **SAFETY FIX: /dcp compact now retires blocks whose projection cannot apply them.** Previously, if the projection failed (appliedBlocks === 0) the blocks were persisted forever but the raw history still went out. The model context would overflow. Now the safety check retires the blocks immediately and warns the user. The raw history goes out unobstructed.
+- **Pre-check fix: `hasClosedToolPairs` now checks both directions.** Every tool call in the range must have its result in the range, and every tool result in the range must have its call in the range. Previously, tool results without matching calls were silently accepted by the pre-check, wasting summarizer tokens on blocks that would be rejected at projection time.
+- **vctx line always shows after /dcp compact.** The invariant is sacrosanct: status before and after compact must differ. The vctx line now shows even when appliedBlocks === 0 (with a diagnostic), so the user always sees that the compact ran.
+- **Massive test expansion: 34 new tests in `tests/massive.test.ts`** covering range selection, projection scenarios, mid-run deferral, aborting compression, configuration commands, session lifecycle, and error handling. Total: 183 tests across 15 files.
+
 ## 0.8.8
 
 - `/dcp context` is now an alias for `/dcp status`. Useful when the footer percentage doesn't reflect the projected (post-`/dcp compact`) size — running this prints the full status including the vctx line so the user can see the actual sent context size.

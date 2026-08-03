@@ -4,7 +4,7 @@ import { triggerCompaction, resetTriggerState } from "./triggers.ts";
 import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
-import { rebuildVirtualBlocks, relieveContextPressure } from "./virtual-blocks.ts";
+import { rebuildVirtualBlocks, relieveContextPressure, retireVirtualBlock } from "./virtual-blocks.ts";
 import { measureProjectedTokens, refreshProjectedContext } from "./context-projector.ts";
 import { isVirtualContextUsageInstalled } from "./context-magic.ts";
 import type { VirtualUsageRef } from "./context-magic.ts";
@@ -118,15 +118,36 @@ async function handleVirtualCompact(
     // projection state so the patched getContextUsage() and /dcp status
     // reflect the post-relief request immediately.
     const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage?.contextWindow ?? 0);
-    const projectedAfter = refresh.projectedTokens > 0 ? refresh.projectedTokens : null;
-    state.lastProjection = refresh.projectedTokens > 0 ? {
-      projectedTokens: refresh.projectedTokens,
+    // Always set state.lastProjection after compact, even if the projection
+    // failed (appliedBlocks === 0). The vctx line in /dcp status depends on
+    // this being set; without it, the two status outputs are identical and the
+    // user has no way to know the compact did anything. If the projection
+    // failed, fall back to the raw usage tokens so the display still changes.
+    const projectedTokens = refresh.projectedTokens > 0 ? refresh.projectedTokens : (usage?.tokens ?? 0);
+    state.lastProjection = {
+      projectedTokens,
       contextWindow: usage?.contextWindow ?? 0,
       appliedBlocks: refresh.appliedBlocks,
       timestamp: Date.now(),
-    } : undefined;
+    };
     projectionRef.current = state.lastProjection;
-    state.triggerState.tokensAtLastCompaction = projectedAfter;
+    state.triggerState.tokensAtLastCompaction = projectedTokens;
+    // SAFETY: if the projection failed for ALL created blocks (appliedBlocks
+    // === 0), the blocks are persisted but useless - the raw history will go
+    // out anyway and the model context will overflow. Retire the blocks
+    // immediately so the user is not exposed to a silent failure.
+    if (relief.created.length > 0 && refresh.appliedBlocks === 0) {
+      for (const block of relief.created) {
+        retireVirtualBlock(pi, block.id);
+      }
+      state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
+      notify(
+        ctx,
+        state.config,
+        `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
+        "warning",
+      );
+    }
     notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
   } finally {
     setCompactingWorking(ctx, false);
@@ -354,8 +375,14 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
   const abs = state.config.triggers.endOfTurn.tokenThresholdAbsolute;
 
   const projection = state.lastProjection;
-  const vctxLine = projection && projection.appliedBlocks > 0
-    ? `vctx (actual sent): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · ${projection.appliedBlocks} summar${projection.appliedBlocks === 1 ? "y" : "ies"} applied`
+  // The vctx line MUST show after /dcp compact - that is the invariant. If the
+  // projection failed (appliedBlocks === 0 because of parallel tool calls,
+  // reasoning drift, etc.), show the projected count anyway with a diagnostic
+  // so the user can see the compact did something and debug the failure.
+  const vctxLine = projection
+    ? projection.appliedBlocks > 0
+      ? `vctx (actual sent): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · ${projection.appliedBlocks} summar${projection.appliedBlocks === 1 ? "y" : "ies"} applied`
+      : `vctx (post-compact): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · projection failed (0 blocks applied)`
     : undefined;
 
   const lines = [

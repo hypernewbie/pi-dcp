@@ -266,7 +266,7 @@ function livePairsStayClosed(
 function hasClosedToolPairs(segments: Segment[], start: number, end: number): boolean {
   const toolCallPositions = new Map<string, number>();
   const toolResultPositions = new Map<string, number>();
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = start; i <= end; i++) {
     for (const message of segments[i].messages) {
       if (message.role === "assistant") {
         for (const part of message.content) if (part.type === "toolCall") toolCallPositions.set(part.id, i);
@@ -274,10 +274,15 @@ function hasClosedToolPairs(segments: Segment[], start: number, end: number): bo
       if (message.role === "toolResult") toolResultPositions.set(message.toolCallId, i);
     }
   }
-  for (const [id, position] of toolCallPositions) {
-    const pairedResult = toolResultPositions.get(id);
-    if (pairedResult === undefined) continue;
-    if ((position >= start && position <= end) !== (pairedResult >= start && pairedResult <= end)) return false;
+  // Every tool call in the range must have its result inside the range.
+  // If a result is missing entirely, the projections live-pairing guard would
+  // orphan the call, so the block must not be created.
+  for (const id of toolCallPositions.keys()) {
+    if (!toolResultPositions.has(id)) return false;
+  }
+  // Every tool result in the range must have its call inside the range too.
+  for (const id of toolResultPositions.keys()) {
+    if (!toolCallPositions.has(id)) return false;
   }
   return true;
 }

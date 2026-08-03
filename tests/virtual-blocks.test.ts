@@ -59,9 +59,20 @@ describe("virtual range compression", () => {
 
   it("creates a durable-ready block with bounded summary, evidence, and preserved prompts", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "phase summary" }] });
+    const assistantWithToolCall: SessionEntry = {
+      type: "message", id: "a1", parentId: null, timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: `done ${"x".repeat(30_000)}` },
+          { type: "toolCall", id: "t1", name: "test", arguments: {} },
+        ],
+        timestamp: Date.now(),
+      },
+    } as unknown as SessionEntry;
     const entries = [
       message("u1", "user", "Keep this instruction"),
-      message("a1", "assistant", `done ${"x".repeat(30_000)}`),
+      assistantWithToolCall,
       { type: "message", id: "r1", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", content: [{ type: "text", text: "test failed: exact error" }], toolCallId: "t1", timestamp: Date.now() } } as unknown as SessionEntry,
       message("u2", "user", "current"),
     ];
@@ -112,11 +123,22 @@ describe("virtual range compression", () => {
 
   it("uses the active-prefix prompt and keeps the current request as retained context", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "brief prefix" }] });
+    const assistantWithToolCall = (id: string, toolCallId: string, text: string): SessionEntry => ({
+      type: "message", id, parentId: null, timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text },
+          { type: "toolCall", id: toolCallId, name: "test", arguments: {} },
+        ],
+        timestamp: Date.now(),
+      } as unknown as AgentMessage,
+    } as unknown as SessionEntry);
     const entries = [
       message("u1", "user", "current request must stay raw"),
-      message("a1", "assistant", "first action " + "x".repeat(30_000)),
+      assistantWithToolCall("a1", "t1", "first action " + "x".repeat(30_000)),
       { type: "message", id: "r1", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "t1", content: [{ type: "text", text: "first result" }], timestamp: Date.now() } } as unknown as SessionEntry,
-      message("a2", "assistant", "newest action " + "y".repeat(30_000)),
+      assistantWithToolCall("a2", "t2", "newest action " + "y".repeat(30_000)),
       { type: "message", id: "r2", parentId: null, timestamp: new Date().toISOString(), message: { role: "toolResult", toolCallId: "t2", content: [{ type: "text", text: "newest result" }], timestamp: Date.now() } } as unknown as SessionEntry,
     ];
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, activeWorkingSetTokens: 1, maxChunkInputTokens: 60_000 } };
@@ -518,10 +540,33 @@ describe("virtual range compression", () => {
 
   it("still allows one automatic active-prefix block when no historical range exists", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    const assistantWithToolCall = (id: string, toolCallId: string, text: string): SessionEntry => ({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text },
+          { type: "toolCall", id: toolCallId, name: "test", arguments: {} },
+        ],
+        timestamp: Date.now(),
+      } as unknown as AgentMessage,
+    } as unknown as SessionEntry);
+    const pairedResult = (id: string, toolCallId: string, text: string): SessionEntry => ({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "toolResult", toolCallId, toolName: "test", content: [{ type: "text", text }], timestamp: Date.now() },
+    } as unknown as SessionEntry);
     const entries = [
       message("u1", "user", "current request"),
-      message("a1", "assistant", "x".repeat(30_000)), toolResult("r1", "first result"),
-      message("a2", "assistant", "y".repeat(30_000)), toolResult("r2", "second result"),
+      assistantWithToolCall("a1", "t1", "x".repeat(30_000)),
+      pairedResult("r1", "t1", "first result"),
+      assistantWithToolCall("a2", "t2", "y".repeat(30_000)),
+      pairedResult("r2", "t2", "second result"),
     ];
     const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 10_000, targetHeadroomTokens: 10_000, activeWorkingSetTokens: 5_000 } };
@@ -533,10 +578,33 @@ describe("virtual range compression", () => {
 
   it("rejects an active-prefix summary larger than the span it replaces", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(30_000) }] });
+    const assistantWithToolCall = (id: string, toolCallId: string, text: string): SessionEntry => ({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text },
+          { type: "toolCall", id: toolCallId, name: "test", arguments: {} },
+        ],
+        timestamp: Date.now(),
+      } as unknown as AgentMessage,
+    } as unknown as SessionEntry);
+    const pairedResult = (id: string, toolCallId: string, text: string): SessionEntry => ({
+      type: "message",
+      id,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "toolResult", toolCallId, toolName: "test", content: [{ type: "text", text }], timestamp: Date.now() } as unknown as AgentMessage,
+    } as unknown as SessionEntry);
     const entries = [
       message("u1", "user", "current request"),
-      message("a1", "assistant", "x".repeat(24_000)), toolResult("r1", "first result"),
-      message("a2", "assistant", "y".repeat(24_000)), toolResult("r2", "second result"),
+      assistantWithToolCall("a1", "t1", "x".repeat(24_000)),
+      pairedResult("r1", "t1", "first result"),
+      assistantWithToolCall("a2", "t2", "y".repeat(24_000)),
+      pairedResult("r2", "t2", "second result"),
     ];
     const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, activeWorkingSetTokens: 5_000 } };
