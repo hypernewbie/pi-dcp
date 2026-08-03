@@ -578,6 +578,76 @@ describe("session lifecycle", () => {
 });
 
 // ============================================================================
+// Projection persistence across context-hook failures
+// ============================================================================
+
+describe("projection persistence", () => {
+  it("vctx line persists when a subsequent context hook projection fails", async () => {
+    // Regression: the context hook used to clear state.lastProjection on
+    // any projection failure, which hid the compact's effect from /dcp status.
+    // Now the catch block keeps the last known projection for display.
+    const branch = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+    ];
+    // We need buildContextEntries to throw to actually exercise the catch
+    // block (projectVirtualBlocksWithInfo has internal try/catch and never
+    // throws). A flag controls when it throws: only during the context hook,
+    // not during the compact itself.
+    let throwOnBuild = false;
+    const throwingCtx = await setupExtension({ branch, usageTokens: 900_000 });
+    const originalBuild = throwingCtx.ctx.sessionManager.buildContextEntries;
+    throwingCtx.ctx.sessionManager = {
+      getBranch: () => branch,
+      buildContextEntries: () => {
+        if (throwOnBuild) throw new Error("simulated branch failure");
+        return originalBuild();
+      },
+    };
+    await throwingCtx.dcpCommand.handler!("compact", throwingCtx.ctx);
+    throwingCtx.notified.length = 0;
+    await throwingCtx.dcpCommand.handler!("status", throwingCtx.ctx);
+    expect(throwingCtx.notified.join("\n")).toContain("vctx");
+    // Now flip the flag so the context hook throws.
+    throwOnBuild = true;
+    const liveMessages = [
+      { role: "user", content: [{ type: "text", text: "totally different live messages" }], timestamp: Date.now() } as any,
+    ];
+    for (const h of throwingCtx.hooks["context"] ?? []) {
+      await h({ type: "context", messages: liveMessages }, throwingCtx.ctx);
+    }
+    throwingCtx.notified.length = 0;
+    await throwingCtx.dcpCommand.handler!("status", throwingCtx.ctx);
+    expect(throwingCtx.notified.join("\n")).toContain("vctx");
+  });
+
+  it("vctx line persists when a subsequent context hook returns zero applied blocks", async () => {
+    // Edge case: projection succeeds but with appliedBlocks === 0. The vctx
+    // line must still show so the user knows the compact ran.
+    const branch = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+    ];
+    const { dcpCommand, ctx, hooks, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    await dcpCommand.handler!("compact", ctx);
+    notified.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    expect(notified.join("\n")).toContain("vctx");
+    const liveMessages = [
+      { role: "user", content: [{ type: "text", text: "different" }], timestamp: Date.now() } as any,
+    ];
+    for (const h of hooks["context"] ?? []) {
+      await h({ type: "context", messages: liveMessages }, ctx);
+    }
+    notified.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    expect(notified.join("\n")).toContain("vctx");
+  });
+});
+
+// ============================================================================
 // Error handling
 // ============================================================================
 

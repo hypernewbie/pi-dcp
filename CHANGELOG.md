@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.10
+
+- The vctx display line in /dcp status now persists across context-hook projection failures. Previously, the catch block in the context hook cleared `state.lastProjection` on any error, which wiped the compact's effect from the status display. Now only `projectionRef.current` (which gates the patched getContextUsage) is cleared on failure, so the next request still uses raw messages (fail-open), but the vctx line continues to show the last known projection from the compact. This addresses the exact bug seen in production: a compact creates blocks, then the next provider request's context hook fails (because live agent messages differ from stored copies - the reason `dcp_read_session` exists), the failure path wipes the display, and the user has no way to know the compact ran.
+
 ## 0.8.9
 
 - **SAFETY FIX: /dcp compact now retires blocks whose projection cannot apply them.** Previously, if the projection failed (appliedBlocks === 0) the blocks were persisted forever but the raw history still went out. The model context would overflow. Now the safety check retires the blocks immediately and warns the user. The raw history goes out unobstructed.

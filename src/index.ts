@@ -446,7 +446,12 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         );
       }
     } catch (error) {
-      state.lastProjection = undefined;
+      // Fail-open: the next request still uses the raw messages. But the vctx
+      // display line in /dcp status depends on state.lastProjection, and
+      // wiping it on every failed projection would hide the compact's effect
+      // from the user. Keep the last known projection for display; only
+      // projectionRef.current (which gates the patched getContextUsage) is
+      // cleared so the next request sees the raw value.
       projectionRef.current = undefined;
       debug(ctx, state.config, `Context summary projection failed open: ${error instanceof Error ? error.message : String(error)}`);
       // Projection is fail-open: request-only pruning may still run below.
