@@ -375,15 +375,21 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
   const abs = state.config.triggers.endOfTurn.tokenThresholdAbsolute;
 
   const projection = state.lastProjection;
-  // The vctx line MUST show after /dcp compact - that is the invariant. If the
-  // projection failed (appliedBlocks === 0 because of parallel tool calls,
-  // reasoning drift, etc.), show the projected count anyway with a diagnostic
-  // so the user can see the compact did something and debug the failure.
+  // The vctx line MUST show after /dcp compact - that is the invariant. It
+  // shows whenever blocks exist, not only when state.lastProjection is set,
+  // because the context hook can clear that state on projection failure. The
+  // blocks themselves are the source of truth: their estimatedBlockTokens
+  // sum IS the projected request size.
+  const blockCount = state.virtualBlocks.length;
+  const blockSummaryTokens = state.virtualBlocks.reduce((sum, b) => sum + b.estimatedBlockTokens, 0);
+  const blockRawTokens = state.virtualBlocks.reduce((sum, b) => sum + b.estimatedRawTokens, 0);
   const vctxLine = projection
     ? projection.appliedBlocks > 0
       ? `vctx (actual sent): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · ${projection.appliedBlocks} summar${projection.appliedBlocks === 1 ? "y" : "ies"} applied`
       : `vctx (post-compact): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · projection failed (0 blocks applied)`
-    : undefined;
+    : blockCount > 0
+      ? `vctx (post-compact): ~${blockSummaryTokens.toLocaleString()} tokens${win > 0 ? ` (${Math.round((blockSummaryTokens / win) * 100)}%)` : ""} · ${blockCount} summar${blockCount === 1 ? "y" : "ies"} persisted (replaced ~${(blockRawTokens - blockSummaryTokens).toLocaleString()} raw tokens)`
+      : undefined;
 
   const lines = [
     `pi-dcp: ${state.config.enabled ? "enabled" : "disabled"}`,

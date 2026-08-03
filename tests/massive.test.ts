@@ -645,6 +645,26 @@ describe("projection persistence", () => {
     await dcpCommand.handler!("status", ctx);
     expect(notified.join("\n")).toContain("vctx");
   });
+
+  it("vctx line shows from block count even if state.lastProjection was cleared", async () => {
+    // The user hit this in production: after a compact, the context hook
+    // (or something else) cleared state.lastProjection, and the vctx line
+    // disappeared. The fix: derive the vctx line from the blocks themselves
+    // (which are the source of truth) when state.lastProjection is undefined.
+    const branch = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+    ];
+    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    await dcpCommand.handler!("compact", ctx);
+    // After compact: blocks exist. vctx should show regardless of whether
+    // state.lastProjection was set or cleared.
+    notified.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    const out = notified.join("\n");
+    expect(out).toContain("vctx");
+  });
 });
 
 // ============================================================================

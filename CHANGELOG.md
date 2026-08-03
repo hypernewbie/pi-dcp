@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.11
+
+- The vctx display line in /dcp status now also shows when `state.lastProjection` is undefined but virtual blocks exist. The blocks themselves are the source of truth: their estimatedBlockTokens sum is the projected request size. This is a safety net for the bug seen in production where `state.lastProjection` was being cleared between compact and status (the context hook clearing it, or some other path). The vctx line is sacrosanct: it MUST show after /dcp compact.
+
 ## 0.8.10
 
 - The vctx display line in /dcp status now persists across context-hook projection failures. Previously, the catch block in the context hook cleared `state.lastProjection` on any error, which wiped the compact's effect from the status display. Now only `projectionRef.current` (which gates the patched getContextUsage) is cleared on failure, so the next request still uses raw messages (fail-open), but the vctx line continues to show the last known projection from the compact. This addresses the exact bug seen in production: a compact creates blocks, then the next provider request's context hook fails (because live agent messages differ from stored copies - the reason `dcp_read_session` exists), the failure path wipes the display, and the user has no way to know the compact ran.
