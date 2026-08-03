@@ -668,6 +668,47 @@ describe("projection persistence", () => {
 });
 
 // ============================================================================
+// Threshold check uses vctx, not raw
+// ============================================================================
+
+describe("threshold check uses projected (vctx) context, not raw", () => {
+  it("displayed thresholds are static config values (not derived from vctx)", async () => {
+    const branch = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+    ];
+    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    await dcpCommand.handler!("compact", ctx);
+    notified.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    const out = notified.join("\n");
+    // Thresholds line is config-driven, not projection-driven.
+    expect(out).toContain("thresholds:");
+    expect(out).toMatch(/thresholds: \d+% \/ [\d,]+/);
+  });
+
+  it("displayed context line uses the vctx (projected) value after compact", async () => {
+    const branch = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+    ];
+    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    await dcpCommand.handler!("compact", ctx);
+    notified.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    const out = notified.join("\n");
+    const vctxMatch = out.match(/vctx[\s\S]*?~([\d,.]+) tokens/);
+    if (!vctxMatch) {
+      throw new Error("No vctx line found in status output:\n" + out);
+    }
+    const projected = Number(vctxMatch![1].replace(/[,.]/g, ""));
+    expect(projected).toBeLessThan(900_000);
+  });
+});
+
+// ============================================================================
 // Error handling
 // ============================================================================
 

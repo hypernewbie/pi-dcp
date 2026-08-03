@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.12
+
+- Tests lock in the threshold semantics: the displayed `thresholds:` line is always the static config value, but the actual trigger check (and the displayed `context:` line) uses the projected (vctx) value. DCP and Pi's native compaction always see the same projected reality, so neither can win a race the other didn't see.
+
 ## 0.8.11
 
 - The vctx display line in /dcp status now also shows when `state.lastProjection` is undefined but virtual blocks exist. The blocks themselves are the source of truth: their estimatedBlockTokens sum is the projected request size. This is a safety net for the bug seen in production where `state.lastProjection` was being cleared between compact and status (the context hook clearing it, or some other path). The vctx line is sacrosanct: it MUST show after /dcp compact.
