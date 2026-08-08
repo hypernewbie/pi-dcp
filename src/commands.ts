@@ -450,12 +450,16 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
   const blockCount = state.virtualBlocks.length;
   const blockSummaryTokens = state.virtualBlocks.reduce((sum, b) => sum + b.estimatedBlockTokens, 0);
   const blockRawTokens = state.virtualBlocks.reduce((sum, b) => sum + b.estimatedRawTokens, 0);
+  // No fresh projection yet (no request since compact). Show an honest estimate:
+  // raw usage minus net replacement, never the summaries' size alone.
+  const replacedRaw = Math.max(0, blockRawTokens - blockSummaryTokens);
+  const estimatedFull = usage?.tokens != null ? Math.max(0, usage.tokens - replacedRaw) : undefined;
   const vctxLine = projection
     ? projection.appliedBlocks > 0
       ? `vctx (actual sent): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · ${projection.appliedBlocks} summar${projection.appliedBlocks === 1 ? "y" : "ies"} applied`
       : `vctx (post-compact): ~${projection.projectedTokens.toLocaleString()} tokens${projection.contextWindow > 0 ? ` (${Math.round((projection.projectedTokens / projection.contextWindow) * 100)}%)` : ""} · projection failed (0 blocks applied)`
     : blockCount > 0
-      ? `vctx (post-compact): ~${blockSummaryTokens.toLocaleString()} tokens${win > 0 ? ` (${Math.round((blockSummaryTokens / win) * 100)}%)` : ""} · ${blockCount} summar${blockCount === 1 ? "y" : "ies"} persisted (replaced ~${(blockRawTokens - blockSummaryTokens).toLocaleString()} raw tokens)`
+      ? `vctx (est. next request): ~${(estimatedFull ?? blockSummaryTokens).toLocaleString()} tokens${estimatedFull !== undefined && win > 0 ? ` (${Math.round((estimatedFull / win) * 100)}%)` : ""} · ${blockCount} summar${blockCount === 1 ? "y" : "ies"} persisted (replaced ~${replacedRaw.toLocaleString()} raw tokens)`
       : undefined;
 
   const lines = [

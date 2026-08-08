@@ -665,6 +665,35 @@ describe("projection persistence", () => {
     const out = notified.join("\n");
     expect(out).toContain("vctx");
   });
+
+  it("fallback vctx line estimates the full request, not just the summaries' size", async () => {
+    // User hit this: after /reload, blocks persist but no fresh projection
+    // exists yet. The fallback line used to show only the sum of the summary
+    // blocks (~9K) as "vctx" (1%) — a lie; the real request is raw usage
+    // minus net replacement. Must show the estimate from usage.
+    const blockEntry = (id: string, raw: number, blk: number): any => ({
+      type: "custom",
+      id,
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "dcp-context-range.v1",
+      data: { version: 1, block: { version: 1, id, startEntryId: "u1", endEntryId: "a1", anchorEntryId: "u1", rangeKind: "historical", messagesCompressed: 2, toolsCompressed: 0, summary: "s".repeat(blk * 4), exactEvidence: "", preservedUserMessages: [], estimatedRawTokens: raw, retainedRawTokens: raw, estimatedBlockTokens: blk, active: true, createdAt: Date.now() } },
+    });
+    const branch = [
+      blockEntry("b1", 40_000, 5_000),
+      blockEntry("b2", 30_000, 4_000),
+      userMessage("u1", "current"),
+    ];
+    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    await dcpCommand.handler!("status", ctx);
+    const out = notified.join("\n");
+    expect(out).toContain("vctx (est. next request)");
+    const m = out.match(/vctx \(est\. next request\): ~([\d,.]+) tokens/);
+    expect(m).not.toBeNull();
+    const est = Number(m![1].replace(/,/g, ""));
+    // 900_000 - (70_000 raw - 9_000 summary) = 839_000, not the 9_000 summary size.
+    expect(est).toBe(839_000);
+  });
 });
 
 // ============================================================================
