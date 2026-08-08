@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.15
+
+- Reverted the native threshold-compaction veto from 0.8.14. Pi already uses provider-reported usage from DCP's projected request after normal successful responses. During error or zero-usage fallback, the extension cannot safely measure Pi's full pending request, so cancelling native compaction could cause repeat cancellations or block needed recovery.
+
 ## 0.8.13
 
 - Fixed projected-context measurements after compaction. Immediate status and growth-throttle measurements now use Pi's token estimator instead of counting serialized message metadata, which could report impossible values such as vctx exceeding the context window by multiple times.
