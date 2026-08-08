@@ -107,37 +107,24 @@ async function handleVirtualCompact(
       state.config.notification !== "off",
     );
     if (relief.created.length === 0) {
-      // Diagnostic for 240k bug: explain why selector found nothing.
+      // Diagnostic for 240k bug — must always print, never swallow.
+      let diag = "";
       try {
-        const branch = ctx.sessionManager.getBranch();
-        const userStarts = branch.map((e:any,i:number)=> e.type==='message' && e.message.role==='user' ? i : -1).filter((i:number)=>i>=0);
+        const branch: any[] = ctx.sessionManager.getBranch() as any[];
+        const userStarts: number[] = [];
+        for (let i=0;i<branch.length;i++) if (branch[i].type==='message' && branch[i].message?.role==='user') userStarts.push(i);
         const covered = new Set<string>();
-        for (const b of state.virtualBlocks) {
+        for (const b of state.virtualBlocks as any[]) {
           const s = branch.findIndex((e:any)=>e.id===b.startEntryId);
-          const eidx = branch.findIndex((e:any)=>e.id===b.endEntryId);
-          if (s>=0 && eidx>=s) for(let i=s;i<=eidx;i++) covered.add(branch[i].id);
+          const ei = branch.findIndex((e:any)=>e.id===b.endEntryId);
+          if (s>=0 && ei>=s) for(let i=s;i<=ei;i++) covered.add(branch[i].id);
         }
         const compCount = branch.filter((e:any)=> e.type==='compaction' || e.type==='branch_summary').length;
-        const compRanges = userStarts.length>1 ? userStarts.length-1 : 0;
-        // quick token estimate via utils
-        const { estimateTextTokens } = await import("./utils.ts");
-        const { sessionEntryToContextMessages } = await import("@earendil-works/pi-coding-agent");
-        let uncoveredTokens=0, uncoveredTurns=0, largestTurn=0;
-        for(let i=0;i<userStarts.length-1;i++){
-          const s=userStarts[i], e=userStarts[i+1]-1;
-          const cand = branch.slice(s,e+1);
-          const unavailable = cand.some((en:any)=>covered.has(en.id)) || cand.some((en:any)=>en.type==='compaction'||en.type==='branch_summary');
-          if(unavailable) continue;
-          const msgs = cand.flatMap((en:any)=> sessionEntryToContextMessages(en));
-          const t = msgs.reduce((sum:number,m:any)=> sum+ estimateTextTokens(JSON.stringify(m)),0);
-          uncoveredTurns++; uncoveredTokens+=t; if(t>largestTurn) largestTurn=t;
-        }
-        const finalStart = userStarts.length ? userStarts[userStarts.length-1] : -1;
-        const activeLen = finalStart>=0 ? branch.length-finalStart-1 : 0;
-        notify(ctx, state.config, `No completed work was available to compact. (diag: branch=${branch.length} userStarts=${userStarts.length} compRanges=${compRanges} compEntries=${compCount} covered=${covered.size} uncoveredTurns=${uncoveredTurns} uncoveredTokens~${Math.round(uncoveredTokens)} largestTurn~${Math.round(largestTurn)} activeAfterLastUser=${activeLen})`, "info");
-      } catch {
-        notify(ctx, state.config, "No completed work was available to compact.", "info");
+        diag = ` branch=${branch.length} userStarts=${userStarts.length} compEntries=${compCount} covered=${covered.size} activeAfterLastUser=${userStarts.length? branch.length-userStarts[userStarts.length-1]-1 : -1}`;
+      } catch (e:any) {
+        diag = ` diagError=${String(e?.message||e).slice(0,80)}`;
       }
+      notify(ctx, state.config, `No completed work was available to compact. (diag:${diag})`, "info");
       return;
     }
     state.triggerState.turnsSinceCompaction = 0;

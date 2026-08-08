@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.18
+
+- Fix diagnostic that swallowed itself: `/dcp compact` deny now always prints branch/userStarts/covered counts.
+
 ## 0.8.17
 
 - Diagnostic for 240k deny: `/dcp compact` now reports branch/userStarts/covered/uncovered counts when it finds nothing, so we can fix the real selector bug.
