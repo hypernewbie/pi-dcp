@@ -19,7 +19,7 @@ import { notify, debug, setCompactingWorking } from "./ui.ts";
 import { createEmptyStats, rebuildStatsFromEntries, recordCompactionStat, recordPruningStat, getCustomType } from "./stats.ts";
 import { rebuildVirtualBlocks, relieveContextPressure, retireVirtualBlock } from "./virtual-blocks.ts";
 import { installVirtualContextUsage, type VirtualUsageRef } from "./context-magic.ts";
-import { projectVirtualBlocksWithInfo, measureProjectedTokens, refreshProjectedContext } from "./context-projector.ts";
+import { projectVirtualBlocksWithInfo, refreshProjectedContext } from "./context-projector.ts";
 import type { DcpConfig, LoadedConfig, ResolvedProtection, RuntimeState } from "./types.ts";
 import type { CompactionInitiator } from "./types.ts";
 
@@ -187,6 +187,22 @@ export default function dcpExtension(pi: ExtensionAPI): void {
             };
             projectionRef.current = state.lastProjection;
             state.triggerState.tokensAtLastCompaction = projectedAfter;
+            // SAFETY: blocks the projection could not apply (appliedBlocks ===
+            // 0) are persisted but useless - the raw history goes out anyway.
+            // Retire them immediately instead of letting them pile up as dead
+            // weight (same guard as handleVirtualCompact).
+            if (refresh.appliedBlocks === 0) {
+              for (const block of relief.created) {
+                retireVirtualBlock(pi, block.id);
+              }
+              state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
+              notify(
+                ctx,
+                state.config,
+                `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
+                "warning",
+              );
+            }
             notify(
               ctx,
               state.config,
@@ -243,8 +259,24 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       // this number; if we stored the pre-relief number, the next pass would
       // be blocked until usage grew past pre-relief + 5%*threshold, opening a
       // dead band where Pi's own aborting compaction can fire instead of DCP.
-      const projectedAfter = measureProjectedTokens(ctx.sessionManager.buildContextEntries(), state.virtualBlocks);
-      state.triggerState.tokensAtLastCompaction = projectedAfter > 0 ? projectedAfter : usage.tokens;
+      const refresh = refreshProjectedContext(ctx.sessionManager.buildContextEntries(), state.virtualBlocks, usage.contextWindow);
+      state.triggerState.tokensAtLastCompaction = refresh.projectedTokens > 0 ? refresh.projectedTokens : usage.tokens;
+      // SAFETY (non-aborting flow): blocks created from a stale branch cannot
+      // be applied (appliedBlocks === 0) but were already persisted. Retire
+      // them so they never silently accumulate as dead weight, matching the
+      // guard in handleVirtualCompact.
+      if (refresh.appliedBlocks === 0) {
+        for (const block of relief.created) {
+          retireVirtualBlock(pi, block.id);
+        }
+        state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
+        notify(
+          ctx,
+          state.config,
+          `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
+          "warning",
+        );
+      }
       debug(ctx, state.config, `Compacted ${relief.created.length} range(s), ~${relief.freedTokens.toLocaleString()} tokens freed`);
     } finally {
       setCompactingWorking(ctx, false);

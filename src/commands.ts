@@ -111,9 +111,8 @@ async function handleVirtualCompact(
       let diag = "";
       try {
         const branch: any[] = ctx.sessionManager.getBranch() as any[];
-        const { sessionEntryToContextMessages } = await import("@earendil-works/pi-coding-agent");
-        const { estimateTextTokens } = await import("./utils.ts");
-        const est = (m:any)=> estimateTextTokens(JSON.stringify(m));
+        const { sessionEntryToContextMessages, estimateTokens } = await import("@earendil-works/pi-coding-agent");
+        const est = (m:any)=> estimateTokens(m);
         const userStarts: number[] = [];
         for (let i=0;i<branch.length;i++) if (branch[i].type==='message' && branch[i].message?.role==='user') userStarts.push(i);
         const covered = new Set<string>();
@@ -310,6 +309,23 @@ export async function runCompressWithVirtualBlocks(
         projectionRef.current = state.lastProjection;
         state.triggerState.tokensAtLastCompaction = refresh.projectedTokens;
       }
+      // SAFETY: if the projection failed for ALL created blocks (appliedBlocks
+      // === 0), the blocks are persisted but useless - the raw history will go
+      // out anyway and the model context will overflow. Retire the blocks
+      // immediately so the user is not exposed to a silent failure, matching
+      // the guard in handleVirtualCompact.
+      if (refresh.appliedBlocks === 0) {
+        for (const block of relief.created) {
+          retireVirtualBlock(pi, block.id);
+        }
+        state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
+        notify(
+          ctx,
+          state.config,
+          `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
+          "warning",
+        );
+      }
       notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
     }
   } finally {
@@ -461,7 +477,15 @@ function statusLines(ctx: ExtensionCommandContext, state: RuntimeState): string[
     : blockCount > 0
       ? (() => {
           const replacedRaw = Math.max(0, blockRawTokens - blockSummaryTokens);
-          const estimatedFull = usage?.tokens != null ? Math.max(0, usage.tokens - replacedRaw) : undefined;
+          // When the patched getContextUsage() already returned the projected
+          // figure (usage.tokens matches the last recorded projection), the
+          // raw-to-summary replacement is already baked in. Subtracting
+          // replacedRaw again would double-count the relief, so only subtract
+          // when usage.tokens is the raw reading.
+          const usageIsProjected = state.lastProjection?.projectedTokens === usage?.tokens;
+          const estimatedFull = usage?.tokens != null
+            ? Math.max(0, usageIsProjected ? usage.tokens : usage.tokens - replacedRaw)
+            : undefined;
           const pct = estimatedFull !== undefined && win > 0 ? ` (${Math.round((estimatedFull / win) * 100)}%)` : "";
           return `vctx (est): ~${(estimatedFull ?? blockSummaryTokens).toLocaleString()}${pct} · ${blockCount} summar${blockCount === 1 ? "y" : "ies"} · -${replacedRaw.toLocaleString()} raw`;
         })()

@@ -9,7 +9,7 @@ import { projectVirtualBlocks } from "../src/context-projector.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, relieveContextPressure, selectExactEvidence } from "../src/virtual-blocks.ts";
 import { entryRangeCanBeReplaced, projectVirtualBlocksWithInfo, refreshProjectedContext } from "../src/context-projector.ts";
 import { MIN_RANGE_RAW_TOKENS, selectCompressibleRange } from "../src/range-selector.ts";
-import { estimateTextTokens } from "../src/utils.ts";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { VirtualCompressionBlock } from "../src/types.ts";
 
@@ -175,6 +175,33 @@ describe("virtual range compression", () => {
     expect(result).toBeUndefined();
   });
 
+  it("rejects a summary larger than its raw content once JSON wrapper inflation is removed (imfoan case)", async () => {
+    // Regression for the imfoan session: with the old JSON/4 estimator, a
+    // range of many small messages carried enough wrapper metadata that the
+    // raw estimate was inflated by ~2.5x, so a summary that was actually
+    // LARGER than the raw content still passed the 25% net-relief gate (it
+    // looked like a positive win). With Pi's content-only estimator the same
+    // range nets negative and the block must be rejected.
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(21_000) }] });
+    const entries: SessionEntry[] = [];
+    for (let i = 0; i < 100; i++) {
+      entries.push(message(`u${i}`, "user", "go"));
+      entries.push({
+        type: "message", id: `a${i}`, parentId: null, timestamp: new Date().toISOString(),
+        message: { role: "assistant", content: [{ type: "toolCall", id: `t${i}`, name: "run", arguments: {} }], timestamp: Date.now() },
+      } as unknown as SessionEntry);
+      entries.push({
+        type: "message", id: `r${i}`, parentId: null, timestamp: new Date().toISOString(),
+        message: { role: "toolResult", toolCallId: `t${i}`, toolName: "run", content: [{ type: "text", text: "r".repeat(200) }], timestamp: Date.now() },
+      } as unknown as SessionEntry);
+    }
+    entries.push(message("uLast", "user", "current"));
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
+    expect(completeSimpleMock).toHaveBeenCalledOnce();
+    expect(result).toBeUndefined();
+  });
+
   it("rejects a summary with negligible net relief", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(21_000) }] });
     const entries = [message("u1", "user", "brief request"), message("a1", "assistant", "x".repeat(24_000)), message("u2", "user", "current")];
@@ -253,8 +280,10 @@ describe("virtual range compression", () => {
     ];
     const range = selectCompressibleRange(entries, [], 60_000, 60_000, 5_000)!;
     expect(range.kind).toBe("active-prefix");
-    const actualPrefixTokens = range.messages.reduce((sum, item) => sum + estimateTextTokens(JSON.stringify(item)), 0);
-    const actualRetainedTokens = range.retainedMessages.reduce((sum, item) => sum + estimateTextTokens(JSON.stringify(item)), 0);
+    // Estimates are now in Pi's content-only chars/4 units (estimateTokens),
+    // never the JSON-wrapped size.
+    const actualPrefixTokens = range.messages.reduce((sum, item) => sum + estimateTokens(item), 0);
+    const actualRetainedTokens = range.retainedMessages.reduce((sum, item) => sum + estimateTokens(item), 0);
     expect(range.estimatedRawTokens).toBe(actualPrefixTokens);
     expect(range.retainedRawTokens).toBe(actualRetainedTokens);
     expect(range.retainedRawTokens).toBeGreaterThanOrEqual(5_000);

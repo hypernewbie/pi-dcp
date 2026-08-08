@@ -1,8 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { VirtualCompressionBlock } from "./types.ts";
-import { estimateTextTokens } from "./utils.ts";
 
 export interface VirtualRange {
   kind: "historical" | "active-prefix";
@@ -212,8 +211,12 @@ function makeRange(
   };
 }
 
+// Pi's own content-only chars/4 estimator, matching the units used by the
+// context hook and the net-relief gate. The old JSON/4 estimate inflated raw
+// ranges by wrapper metadata, so a summary larger than the raw content could
+// pass the 25% net-relief gate (imfoan case).
 function estimateMessageTokens(message: AgentMessage): number {
-  return estimateTextTokens(JSON.stringify(message));
+  return estimateTokens(message);
 }
 
 function isClosedRange(entries: readonly SessionEntry[], start: number, end: number): boolean {

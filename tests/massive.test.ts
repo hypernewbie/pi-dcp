@@ -236,7 +236,7 @@ describe("/dcp compact: range selection", () => {
         message: {
           role: "assistant",
           content: [
-            { type: "thinking", text: "reasoning" },
+            { type: "thinking", thinking: "reasoning" },
             { type: "text", text: "done" },
           ],
           timestamp: Date.now(),
