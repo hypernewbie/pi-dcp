@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.19
+
+- Deep diag for 240k: prints unavailable/empty/tooLarge/tooSmall/notClosed and active prefix state.
+
 ## 0.8.18
 
 - Fix diagnostic that swallowed itself: `/dcp compact` deny now always prints branch/userStarts/covered counts.
