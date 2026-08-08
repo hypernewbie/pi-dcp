@@ -175,7 +175,9 @@ export default function dcpExtension(pi: ExtensionAPI): void {
             notify(ctx, state.config, "No completed work was available to compact.", "info");
           } else {
             state.triggerState.turnsSinceCompaction = 0;
-            const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage.contextWindow);
+            // Measure the ACTIVE context (compactions applied), not the raw
+            // branch: the provider only receives post-compaction messages.
+            const refresh = refreshProjectedContext(ctx.sessionManager.buildContextEntries(), state.virtualBlocks, usage.contextWindow);
             const projectedAfter = refresh.projectedTokens > 0 ? refresh.projectedTokens : usage.tokens;
             state.lastProjection = {
               projectedTokens: projectedAfter,
@@ -241,7 +243,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       // this number; if we stored the pre-relief number, the next pass would
       // be blocked until usage grew past pre-relief + 5%*threshold, opening a
       // dead band where Pi's own aborting compaction can fire instead of DCP.
-      const projectedAfter = measureProjectedTokens(ctx.sessionManager.getBranch(), state.virtualBlocks);
+      const projectedAfter = measureProjectedTokens(ctx.sessionManager.buildContextEntries(), state.virtualBlocks);
       state.triggerState.tokensAtLastCompaction = projectedAfter > 0 ? projectedAfter : usage.tokens;
       debug(ctx, state.config, `Compacted ${relief.created.length} range(s), ~${relief.freedTokens.toLocaleString()} tokens freed`);
     } finally {

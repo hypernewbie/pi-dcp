@@ -113,6 +113,12 @@ export function projectVirtualBlocks(
  * the provider actually receives, so the growth-throttle re-trigger guard
  * doesn't compare a new raw measurement against a stale pre-relief number.
  * Returns 0 when the branch cannot be projected.
+ *
+ * IMPORTANT: pass the ACTIVE context (`buildContextEntries()`), never the raw
+ * branch (`getBranch()`). The raw branch still contains every pre-compaction
+ * message, which the provider never sees; measuring it inflates vctx by
+ * multiples of the window (seen in the field: 1.5M at a 1M window while the
+ * provider reported 305K).
  */
 export function measureProjectedTokens(
   branch: readonly SessionEntry[],
@@ -146,6 +152,10 @@ export interface ProjectedRefreshResult {
  * of the stale pre-relief one. Returns the projected token count and the
  * number of blocks that actually applied. Returns 0/0 when the branch cannot
  * be projected, so the caller can fall back to the raw usage value.
+ *
+ * IMPORTANT: pass the ACTIVE context (`buildContextEntries()`), never the raw
+ * branch (`getBranch()`) — see measureProjectedTokens for the field bug this
+ * prevents.
  */
 export function refreshProjectedContext(
   branch: readonly SessionEntry[],

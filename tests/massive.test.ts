@@ -706,6 +706,38 @@ describe("threshold check uses projected (vctx) context, not raw", () => {
     const projected = Number(vctxMatch![1].replace(/[,.]/g, ""));
     expect(projected).toBeLessThan(900_000);
   });
+
+  it("vctx after compact measures the ACTIVE context, not the raw branch", async () => {
+    // Regression: refreshProjectedContext/measureProjectedTokens were fed
+    // getBranch() (raw history, still contains every pre-compaction message).
+    // The provider never sees that; measuring it produced vctx of 1.5M at a
+    // 1M window while the provider reported 305K. Must use buildContextEntries().
+    const compacted = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+    ];
+    // Raw branch contains a million chars of stale pre-compaction junk that
+    // buildContextEntries() excludes.
+    const staleJunk = [
+      userMessage("j1", "z".repeat(1_000_000)),
+      assistantMessage("j2", "stale"),
+    ];
+    const rawBranch = [...staleJunk, ...compacted];
+    const { dcpCommand, ctx, notified } = await setupExtension({ branch: rawBranch, usageTokens: 900_000 });
+    ctx.sessionManager.buildContextEntries = () => compacted;
+
+    await dcpCommand.handler!("compact", ctx);
+    notified.length = 0;
+    await dcpCommand.handler!("status", ctx);
+    const out = notified.join("\n");
+    const vctxMatch = out.match(/vctx[\s\S]*?~([\d,.]+) tokens/);
+    if (!vctxMatch) throw new Error("No vctx line found:\n" + out);
+    const projected = Number(vctxMatch[1].replace(/[,.]/g, ""));
+    // Stale junk (~250K tokens) must NOT be counted; projected must be the
+    // compacted slice size (~200K), not ~450K+.
+    expect(projected).toBeLessThan(300_000);
+  });
 });
 
 // ============================================================================

@@ -184,7 +184,7 @@ async function handleVirtualCompact(
     // own aborting compaction can fire instead of DCP. Also refresh the
     // projection state so the patched getContextUsage() and /dcp status
     // reflect the post-relief request immediately.
-    const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage?.contextWindow ?? 0);
+    const refresh = refreshProjectedContext(ctx.sessionManager.buildContextEntries(), state.virtualBlocks, usage?.contextWindow ?? 0);
     // Always set state.lastProjection after compact, even if the projection
     // failed (appliedBlocks === 0). The vctx line in /dcp status depends on
     // this being set; without it, the two status outputs are identical and the
@@ -299,7 +299,7 @@ export async function runCompressWithVirtualBlocks(
       state.config.notification !== "off",
     );
     if (relief.created.length > 0) {
-      const refresh = refreshProjectedContext(ctx.sessionManager.getBranch(), state.virtualBlocks, usage?.contextWindow ?? 0);
+      const refresh = refreshProjectedContext(ctx.sessionManager.buildContextEntries(), state.virtualBlocks, usage?.contextWindow ?? 0);
       if (refresh.projectedTokens > 0) {
         state.lastProjection = {
           projectedTokens: refresh.projectedTokens,

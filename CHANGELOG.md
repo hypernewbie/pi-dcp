@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.22
+
+- **vctx inflation fix**: post-compact and growth-throttle measurements now use `buildContextEntries()` (the active context the provider actually receives) instead of `getBranch()` (raw history, which still contains every pre-compaction message). Field case: vctx showed 1,565,017 tokens (149%) at a 1M window while the provider reported 305K. The context hook was already honest; only the compact-path measurements were wrong.
+
 ## 0.8.21
 
 - Fix 240k `notReplaceable` bug: the accumulator could pick a historical range that splits a tool call/result pair, which the projector then rejects. Now it verifies the accumulation is closed before returning and falls back to the largest single closed turn.
