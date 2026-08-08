@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.23
+
+- Unify estimator (Pi content-only), retire orphaned blocks on all paths, honest receipts and vctx-est double-count fix. Net-negative summaries (e.g., imfoan) now rejected.
+
 ## 0.8.22
 
 - **vctx inflation fix**: post-compact and growth-throttle measurements now use `buildContextEntries()` (the active context the provider actually receives) instead of `getBranch()` (raw history, which still contains every pre-compaction message). Field case: vctx showed 1,565,017 tokens (149%) at a 1M window while the provider reported 305K. The context hook was already honest; only the compact-path measurements were wrong.
