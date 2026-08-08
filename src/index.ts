@@ -499,44 +499,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_before_compact", async (event, ctx) => {
-    // Pi decides threshold compaction from raw session usage before this hook
-    // runs. Re-check with a fresh projected request and cancel only when the
-    // projected value is still below DCP's threshold. Overflow and manual
-    // compactions remain Pi's responsibility.
-    if (
-      event.reason === "threshold" &&
-      state.config.enabled &&
-      state.config.triggers.endOfTurn.enabled &&
-      state.config.contextRelief.enabled &&
-      state.triggerState.pendingInitiator === null
-    ) {
-      try {
-        const branch = ctx.sessionManager.getBranch();
-        const contextWindow = ctx.model?.contextWindow ?? ctx.getContextUsage()?.contextWindow ?? 0;
-        const threshold = resolveEffectiveThreshold(
-          state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
-          state.config.triggers.endOfTurn.tokenThresholdAbsolute,
-          contextWindow,
-        );
-        const blocks = rebuildVirtualBlocks(branch);
-        state.virtualBlocks = blocks;
-        const projectedTokens = measureProjectedTokens(branch, blocks);
-        if (threshold !== null && projectedTokens > 0 && projectedTokens <= threshold) {
-          return { cancel: true };
-        }
-      } catch {
-        // If a fresh projection cannot be measured, leave Pi's native threshold
-        // compaction untouched rather than risking a failed compaction.
-      }
-    }
-
     const initiator = state.triggerState.pendingInitiator ?? "pi-native";
     const focusIsUserSupplied = state.triggerState.pendingFocusIsExplicit;
 
     // Only substitute DCP's own custom summary when pi-dcp explicitly asked for
     // the one-shot /dcp compress path. A plain native /compact, or Pi's own
-    // threshold/overflow auto-compaction that was not vetoed above, gets Pi's
-    // own default summary untouched - pi-dcp still reports it honestly (as
+    // threshold/overflow auto-compaction, gets Pi's own
+    // default summary untouched - pi-dcp still reports it honestly (as
     // "PI COMPACT", never a fake DCP run identity) without hijacking what the
     // user or Pi itself asked for.
     if (initiator === "pi-native") {

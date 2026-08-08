@@ -1,10 +1,5 @@
 # Changelog
 
-## 0.8.14
-
-- Native Pi threshold compaction now gets a fresh projected-context check. When the request sent to the model is still below DCP's threshold, the extension vetoes Pi's raw-usage threshold compaction; manual and overflow compactions remain untouched.
-- Added coverage for the native-threshold veto.
-
 ## 0.8.13
 
 - Fixed projected-context measurements after compaction. Immediate status and growth-throttle measurements now use Pi's token estimator instead of counting serialized message metadata, which could report impossible values such as vctx exceeding the context window by multiple times.
