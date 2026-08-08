@@ -107,7 +107,37 @@ async function handleVirtualCompact(
       state.config.notification !== "off",
     );
     if (relief.created.length === 0) {
-      notify(ctx, state.config, "No completed work was available to compact.", "info");
+      // Diagnostic for 240k bug: explain why selector found nothing.
+      try {
+        const branch = ctx.sessionManager.getBranch();
+        const userStarts = branch.map((e:any,i:number)=> e.type==='message' && e.message.role==='user' ? i : -1).filter((i:number)=>i>=0);
+        const covered = new Set<string>();
+        for (const b of state.virtualBlocks) {
+          const s = branch.findIndex((e:any)=>e.id===b.startEntryId);
+          const eidx = branch.findIndex((e:any)=>e.id===b.endEntryId);
+          if (s>=0 && eidx>=s) for(let i=s;i<=eidx;i++) covered.add(branch[i].id);
+        }
+        const compCount = branch.filter((e:any)=> e.type==='compaction' || e.type==='branch_summary').length;
+        const compRanges = userStarts.length>1 ? userStarts.length-1 : 0;
+        // quick token estimate via utils
+        const { estimateTextTokens } = await import("./utils.ts");
+        const { sessionEntryToContextMessages } = await import("@earendil-works/pi-coding-agent");
+        let uncoveredTokens=0, uncoveredTurns=0, largestTurn=0;
+        for(let i=0;i<userStarts.length-1;i++){
+          const s=userStarts[i], e=userStarts[i+1]-1;
+          const cand = branch.slice(s,e+1);
+          const unavailable = cand.some((en:any)=>covered.has(en.id)) || cand.some((en:any)=>en.type==='compaction'||en.type==='branch_summary');
+          if(unavailable) continue;
+          const msgs = cand.flatMap((en:any)=> sessionEntryToContextMessages(en));
+          const t = msgs.reduce((sum:number,m:any)=> sum+ estimateTextTokens(JSON.stringify(m)),0);
+          uncoveredTurns++; uncoveredTokens+=t; if(t>largestTurn) largestTurn=t;
+        }
+        const finalStart = userStarts.length ? userStarts[userStarts.length-1] : -1;
+        const activeLen = finalStart>=0 ? branch.length-finalStart-1 : 0;
+        notify(ctx, state.config, `No completed work was available to compact. (diag: branch=${branch.length} userStarts=${userStarts.length} compRanges=${compRanges} compEntries=${compCount} covered=${covered.size} uncoveredTurns=${uncoveredTurns} uncoveredTokens~${Math.round(uncoveredTokens)} largestTurn~${Math.round(largestTurn)} activeAfterLastUser=${activeLen})`, "info");
+      } catch {
+        notify(ctx, state.config, "No completed work was available to compact.", "info");
+      }
       return;
     }
     state.triggerState.turnsSinceCompaction = 0;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.17
+
+- Diagnostic for 240k deny: `/dcp compact` now reports branch/userStarts/covered/uncovered counts when it finds nothing, so we can fix the real selector bug.
+
 ## 0.8.16
 
 - Fix 240k "nothing to compact" bug. Fragmented history (small islands between existing summaries/compactions) could reset the accumulator before it reached the useful-size threshold, claiming no work even though ~2M tokens of uncovered history existed. Now falls back to the largest single uncovered historical turn before claiming nothing.
