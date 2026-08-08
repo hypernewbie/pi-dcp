@@ -171,7 +171,8 @@ async function handleVirtualCompact(
           }
           activeInfo=` activeLen=${activeEntries.length} activeTokens~${Math.round(activeTokens)} prefixEnd=${prefixEnd} prefixTokens~${Math.round(prefixTokens)}`;
         }
-        diag=` branch=${branch.length} userStarts=${userStarts.length} totalTurns=${totalTurns} compEntries=${branch.filter((e:any)=>e.type==='compaction').length} covered=${covered.size} candidates=${candidates} largest~${Math.round(largest)} unavailable=${unavailable} empty=${empty} tooLarge=${tooLarge} tooSmall=${tooSmall} notClosed=${notClosed}${activeInfo}`;
+        const lastReason = (globalThis as any).__dcp_lastCreateReason || "noRange";
+        diag=` branch=${branch.length} userStarts=${userStarts.length} totalTurns=${totalTurns} compEntries=${branch.filter((e:any)=>e.type==='compaction').length} covered=${covered.size} candidates=${candidates} largest~${Math.round(largest)} unavailable=${unavailable} empty=${empty} tooLarge=${tooLarge} tooSmall=${tooSmall} notClosed=${notClosed}${activeInfo} lastCreate=${String(lastReason).slice(0,120)}`;
       } catch (e:any) { diag=` diagError=${String(e?.message||e).slice(0,120)}`; }
       notify(ctx, state.config, `No completed work was available to compact. (diag:${diag})`, "info");
       return;

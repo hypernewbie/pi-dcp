@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.20
+
+- Creation-stage diag: now also reports why a found range was rejected (notReplaceable / promptTooLarge / netReliefFail etc).
+
 ## 0.8.19
 
 - Deep diag for 240k: prints unavailable/empty/tooLarge/tooSmall/notClosed and active prefix state.

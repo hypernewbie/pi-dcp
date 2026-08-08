@@ -205,15 +205,19 @@ export async function createVirtualBlock(
     config.contextRelief.activeWorkingSetTokens,
     allowActivePrefix,
   );
-  if (!range) return undefined;
+  if (!range) {
+    (globalThis as any).__dcp_lastCreateReason = `no range (branch=${branch.length} blocks=${blocks.length} maxInput=${Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit)})`;
+    return undefined;
+  }
+  (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens}`;
 
   // Refuse before spending a summary call: if the projector could not replace
   // this exact range, the block would be created, persisted, and then rejected
   // on every future request forever.
-  if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) return undefined;
+  if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) { (globalThis as any).__dcp_lastCreateReason += " -> notReplaceable"; return undefined; }
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) return undefined;
+  if (!auth.ok) { (globalThis as any).__dcp_lastCreateReason += " -> noAuth"; return undefined; }
 
   const conversationText = serializeConversation(convertToLlm(range.messages));
   const protectedResult = buildProtectedAppendix(range.messages, {
@@ -233,7 +237,7 @@ export async function createVirtualBlock(
   });
   const reasoning = model.reasoning && thinkingLevel !== "off" ? thinkingLevel : undefined;
   if (typeof model.contextWindow === "number" && model.contextWindow > 0 &&
-      estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) return undefined;
+      estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) { (globalThis as any).__dcp_lastCreateReason += ` -> promptTooLarge ${estimateTextTokens(userPrompt)}+${outputLimit}>${model.contextWindow}`; return undefined; }
 
   try {
     const response = await completeSimple(
@@ -251,12 +255,12 @@ export async function createVirtualBlock(
         signal: ctx.signal,
       },
     );
-    if (response.stopReason === "error") return undefined;
+    if (response.stopReason === "error") { (globalThis as any).__dcp_lastCreateReason += ` -> summaryError ${response.errorMessage||""}`.slice(0,80); return undefined; }
     const summary = response.content
       .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
       .map((part) => part.text)
       .join("\n").trim();
-    if (!summary || /<\/?think(?:ing)?>/i.test(summary)) return undefined;
+    if (!summary || /<\/?think(?:ing)?>/i.test(summary)) { (globalThis as any).__dcp_lastCreateReason += " -> emptyOrThinking"; return undefined; }
 
     const preserved = collectRealUserMessages(range.messages);
     const composed = appendPreservedUserMessages(summary, range.messages, undefined, config.contextRelief.preservedUserMessageTokens);
@@ -266,7 +270,7 @@ export async function createVirtualBlock(
     // Tiny wins do not justify a durable summary or a full model call. Require
     // both meaningful absolute relief and a meaningful fraction of the range.
     if (netReliefTokens < MIN_NET_RELIEF_TOKENS ||
-        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) return undefined;
+        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) { (globalThis as any).__dcp_lastCreateReason += ` -> netReliefFail raw~${range.estimatedRawTokens} block~${estimatedBlockTokens} net~${netReliefTokens}`; return undefined; }
     const items = countRangeItems(range.messages);
     return {
       version: 1,
