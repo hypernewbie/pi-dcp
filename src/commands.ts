@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext, ExtensionContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolveEffectiveThreshold } from "./config.ts";
+import { resolveEffectiveThreshold, computeReliefFreeTarget } from "./config.ts";
 import { triggerCompaction, resetTriggerState } from "./triggers.ts";
 import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
@@ -92,9 +92,10 @@ async function handleVirtualCompact(
       state.config.triggers.endOfTurn.tokenThresholdAbsolute,
       usage?.contextWindow ?? 0,
     );
-    const freeTarget = usage?.tokens != null && threshold !== null
-      ? Math.max(0, usage.tokens - threshold) + state.config.contextRelief.targetHeadroomTokens
-      : state.config.contextRelief.targetHeadroomTokens;
+    // Aim for min(threshold + headroom, targetFloorTokens): when usage is far
+    // above the threshold (e.g. 250K), the floor dominates and the pass targets
+    // the ~100K floor instead of stopping at a shallow fold above threshold.
+    const freeTarget = computeReliefFreeTarget(usage?.tokens, threshold, state.config.contextRelief);
     const relief = await relieveContextPressure(
       pi,
       ctx,
@@ -283,9 +284,9 @@ export async function runCompressWithVirtualBlocks(
       state.config.triggers.endOfTurn.tokenThresholdAbsolute,
       usage?.contextWindow ?? 0,
     );
-    const freeTarget = usage?.tokens != null && threshold !== null
-      ? Math.max(0, usage.tokens - threshold) + state.config.contextRelief.targetHeadroomTokens
-      : state.config.contextRelief.targetHeadroomTokens;
+    // Floor target: min(threshold + headroom, targetFloorTokens) — see
+    // computeReliefFreeTarget. Deep pressure aims at the ~100K floor.
+    const freeTarget = computeReliefFreeTarget(usage?.tokens, threshold, state.config.contextRelief);
     const relief = await relieveContextPressure(
       pi,
       ctx,

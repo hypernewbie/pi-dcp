@@ -10,7 +10,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { selectCompressibleRange, type VirtualRange } from "./range-selector.ts";
-import { entryRangeCanBeReplaced } from "./context-projector.ts";
+import { entryRangeCanBeReplaced, measureProjectedTokens } from "./context-projector.ts";
+import { debug } from "./ui.ts";
 import type {
   DcpBlockEntryData,
   DcpConfig,
@@ -134,6 +135,13 @@ const MIN_NET_RELIEF_RATIO = 0.25;
  * `freeTargetTokens`, one range at a time. A single range is capped by
  * maxChunkInputTokens, so real pressure (e.g. 300K over threshold) requires
  * several blocks in one pass rather than one under-sized fold.
+ *
+ * freedTokens (the pass-stop signal) is accumulated in Pi's honest
+ * content-only units (chars/4, see estimateMessageTokens): raw range tokens
+ * minus the replacement summary's tokens, both measured the same way the
+ * net-relief gate and the context hook measure them. A debug-only check below
+ * cross-checks the pass against the projected wire size after each block and
+ * logs when they diverge by more than 30%.
  */
 export async function relieveContextPressure(
   pi: ExtensionAPI,
@@ -149,6 +157,14 @@ export async function relieveContextPressure(
   const created: VirtualCompressionBlock[] = [];
   const firstNumber = blocks.length + 1;
   let freedTokens = 0;
+  // Baseline of the projected wire size before this pass, used only by the
+  // debug cross-check (authoritative pass stopping stays on freedTokens).
+  // Guarded exactly like createVirtualBlock: some hosts expose a partial
+  // sessionManager outside a live session.
+  const projectedBefore =
+    typeof ctx.sessionManager.buildContextEntries === "function"
+      ? measureProjectedTokens(ctx.sessionManager.buildContextEntries(), blocks)
+      : 0;
   for (let i = 0; i < MAX_BLOCKS_PER_RELIEF; i++) {
     if (created.length > 0 && freedTokens >= freeTargetTokens) break;
     // Active-prefix relief is the last resort for a single uninterrupted run,
@@ -159,6 +175,23 @@ export async function relieveContextPressure(
     blocks.push(block);
     created.push(block);
     freedTokens += Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
+    // Debug cross-check: the projected wire delta after applying the new block
+    // should approximate the estimated raw-to-summary delta. A large divergence
+    // means the estimator and the projector disagree about this range (message
+    // drift, block supersession, or a broken projection) and the pass-stop
+    // signal is less trustworthy than the projected number.
+    if (projectedBefore > 0) {
+      const projectedAfter = measureProjectedTokens(ctx.sessionManager.buildContextEntries(), blocks);
+      const projectedDelta = projectedBefore - projectedAfter;
+      const estimatedDelta = Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
+      if (projectedDelta > 0 && Math.abs(projectedDelta - estimatedDelta) / projectedDelta > 0.3) {
+        debug(
+          ctx,
+          config,
+          `relief divergence: projected delta ${Math.round(projectedDelta)} vs estimated ${Math.round(estimatedDelta)} (block ${block.id})`,
+        );
+      }
+    }
   }
   if (showReceipts && created.length > 0) {
     appendReliefReceipt(pi, created, {

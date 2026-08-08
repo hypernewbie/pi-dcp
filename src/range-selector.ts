@@ -19,7 +19,7 @@ export interface VirtualRange {
 // worthwhile relief. This is intentionally a safety policy, not a user knob.
 export const MIN_RANGE_RAW_TOKENS = 5_000;
 
-/** Select whole finished turns first, then an early active prefix. */
+// Select the largest finished-work island first, then an early active prefix.
 export function selectCompressibleRange(
   entries: readonly SessionEntry[],
   blocks: readonly VirtualCompressionBlock[],
@@ -48,59 +48,67 @@ export function selectCompressibleRange(
     completeRanges.push({ start: userStarts[i], end: userStarts[i + 1] - 1 });
   }
 
-  let selected: SessionEntry[] = [];
-  let startIndex = -1;
-  let endIndex = -1;
-  let estimated = 0;
-  const resetSelection = () => {
-    selected = [];
-    startIndex = -1;
-    endIndex = -1;
-    estimated = 0;
-  };
-
-  for (const range of completeRanges) {
+  // Largest-island-first: one block is one contiguous entry span (the
+  // projector can only replace contiguous spans), so the largest closed island
+  // is returned per call and the covered set makes the relieve loop consume
+  // the next-largest islands on its following iterations. Islands are
+  // consecutive runs of turns with no covered/compaction/branch_summary entry;
+  // an island larger than the block cap is split into its largest fitting
+  // contiguous turn-run instead of being skipped.
+  const turnTokens: number[] = new Array(completeRanges.length).fill(0);
+  const islands: Array<{ from: number; to: number }> = [];
+  let islandStart = -1;
+  for (let i = 0; i < completeRanges.length; i++) {
+    const range = completeRanges[i];
     const candidate = entries.slice(range.start, range.end + 1);
-    if (candidate.length === 0) continue;
-    // Never make one range jump across an existing summary or native summary.
-    // If the accumulated island is too small to be useful, leave it raw and
-    // keep scanning rather than wasting a summary call or hiding a later range.
-    const unavailable = candidate.some((entry) => covered.has(entry.id)) ||
+    const unavailable = candidate.length === 0 ||
+      candidate.some((entry) => covered.has(entry.id)) ||
       candidate.some((entry) => entry.type === "compaction" || entry.type === "branch_summary");
     if (unavailable) {
-      if (selected.length > 0 && estimated >= minRangeRawTokens) break;
-      resetSelection();
+      if (islandStart >= 0) {
+        islands.push({ from: islandStart, to: i - 1 });
+        islandStart = -1;
+      }
       continue;
     }
     const messages = candidate.flatMap((entry) => sessionEntryToContextMessages(entry));
-    if (messages.length === 0) continue;
-    const tokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
-    if (selected.length > 0 && estimated + tokens > maxInputTokens) {
-      if (estimated >= minRangeRawTokens) break;
-      resetSelection();
+    if (messages.length === 0) {
+      if (islandStart >= 0) {
+        islands.push({ from: islandStart, to: i - 1 });
+        islandStart = -1;
+      }
+      continue;
     }
-    if (tokens > maxInputTokens) continue;
-    if (startIndex < 0) startIndex = range.start;
-    endIndex = range.end;
-    selected.push(...candidate);
-    estimated += tokens;
-    const selectionTarget = Math.max(minRangeRawTokens, Math.min(targetTokens, maxInputTokens));
-    if (estimated >= selectionTarget) break;
+    turnTokens[i] = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+    if (islandStart < 0) islandStart = i;
+  }
+  if (islandStart >= 0) islands.push({ from: islandStart, to: completeRanges.length - 1 });
+
+  let best: { start: number; end: number; tokens: number } | null = null;
+  for (const island of islands) {
+    for (let i = island.from; i <= island.to; i++) {
+      let tokens = 0;
+      for (let j = i; j <= island.to; j++) {
+        tokens += turnTokens[j];
+        if (tokens > maxInputTokens) break; // extending only grows the window
+        if (tokens < minRangeRawTokens) continue;
+        if (!isClosedRange(entries, completeRanges[i].start, completeRanges[j].end)) continue;
+        if (!best || tokens > best.tokens || (tokens === best.tokens && completeRanges[i].start < best.start)) {
+          best = { start: completeRanges[i].start, end: completeRanges[j].end, tokens };
+        }
+      }
+    }
   }
 
-  if (selected.length > 0 && startIndex >= 0 && endIndex >= 0 && estimated >= minRangeRawTokens) {
-    // The accumulation must be projectable; otherwise it will be rejected by
-    // entryRangeCanBeReplaced and the whole compact will claim nothing.
-    if (isClosedRange(entries, startIndex, endIndex)) {
-      return makeRange(entries, selected, startIndex, endIndex, estimated);
-    }
-    // Not projectable (split tool call) — fall through to single-turn fallback.
+  if (best) {
+    const sel = entries.slice(best.start, best.end + 1);
+    return makeRange(entries, [...sel], best.start, best.end, best.tokens);
   }
 
   // Fragmentation fallback for manual / large-context sessions: if the
-  // accumulation above failed due to covered/compaction gaps resetting a tiny
-  // island, pick the largest single uncovered historical turn instead of
-  // claiming nothing to compact.
+  // largest-island selection above found nothing useful (every window too
+  // small, over the cap, or not projectable), pick the largest single
+  // uncovered historical turn instead of claiming nothing to compact.
   {
     let best: { start: number; end: number; tokens: number } | null = null;
     for (const range of completeRanges) {

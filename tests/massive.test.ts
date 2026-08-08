@@ -160,17 +160,28 @@ describe("/dcp compact: range selection", () => {
     expect(notified.some((m) => m.includes("Compacted") && m.includes("range"))).toBe(true);
   });
 
-  it("creates a block from the oldest completed turn when multiple exist", async () => {
+  it("creates a block from the largest completed turn, not the oldest", async () => {
+    // Largest-island-first: the 200K-char turn (~50K tokens) must be selected
+    // over the older 100K-char turn (~25K) even though it is newer.
     const branch = [
-      userMessage("u1", "x".repeat(200_000)),
+      userMessage("u1", "x".repeat(100_000)),
       assistantMessage("a1", "first done"),
       userMessage("u2", "x".repeat(200_000)),
       assistantMessage("a2", "second done"),
       userMessage("u3", "current"),
     ];
-    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    const { dcpCommand, ctx, mockApi, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    const appendedBlocks: any[] = [];
+    const originalAppend = mockApi.appendEntry as (type?: string, data?: any) => void;
+    mockApi.appendEntry = ((type: string, data: any) => {
+      if (type === "dcp-context-range.v1") appendedBlocks.push(data?.block);
+      originalAppend(type, data);
+    }) as any;
     await dcpCommand.handler!("compact", ctx);
     expect(notified.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
+    expect(appendedBlocks.length).toBeGreaterThan(0);
+    expect(appendedBlocks[0].startEntryId).toBe("u2");
+    expect(appendedBlocks[0].endEntryId).toBe("a2");
   });
 
   it("skips a too-small first turn and picks a larger later turn", async () => {

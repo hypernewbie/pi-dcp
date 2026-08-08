@@ -71,6 +71,12 @@ export interface ContextReliefConfig {
   enabled: boolean;
   triggerPercent: number | null;
   targetHeadroomTokens: number;
+  /**
+   * Relief passes aim to land at min(threshold + headroom, this floor), so
+   * deep pressure (usage far above threshold) targets the floor in one large
+   * pass instead of stopping at a shallow fold just above threshold.
+   */
+  targetFloorTokens: number;
   maxChunkInputTokens: number;
   maxChunkSummaryTokens: number;
   exactEvidenceTokens: number;

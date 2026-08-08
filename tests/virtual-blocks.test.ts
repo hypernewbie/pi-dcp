@@ -242,6 +242,33 @@ describe("virtual range compression", () => {
     expect(range?.endEntryId).toBe("a2");
   });
 
+  it("picks the largest closed island, not the oldest", () => {
+    // Both turns are one contiguous island (~22K total, under the 60K cap), so
+    // the WHOLE island is selected - the largest window, not the oldest turn.
+    const entries = [
+      message("u1", "user", "x".repeat(8_000)), message("a1", "assistant", "old done"),
+      message("u2", "user", "y".repeat(14_000)), message("a2", "assistant", "big done"),
+      message("u3", "user", "current"),
+    ];
+    const range = selectCompressibleRange(entries, [], 60_000, 60_000, 0, true, 0);
+    expect(range?.startEntryId).toBe("u1");
+    expect(range?.endEntryId).toBe("a2");
+  });
+
+  it("picks the larger of two barrier-separated islands", () => {
+    // A compaction entry between the turns separates the islands; the larger
+    // (newer) island must win even though the older one comes first.
+    const entries = [
+      message("u1", "user", "x".repeat(8_000)), message("a1", "assistant", "old done"),
+      { type: "compaction", id: "c1", parentId: null, timestamp: new Date().toISOString(), message: { role: "compactionSummary", summary: "old work" } } as unknown as SessionEntry,
+      message("u2", "user", "y".repeat(40_000)), message("a2", "assistant", "big done"),
+      message("u3", "user", "current"),
+    ];
+    const range = selectCompressibleRange(entries, [], 60_000, 60_000, 0, true, 0);
+    expect(range?.startEntryId).toBe("u2");
+    expect(range?.endEntryId).toBe("a2");
+  });
+
   it("skips a range already represented by a durable block", () => {
     const entries = [message("u1", "user", "one"), message("a1", "assistant", "done one"), message("u2", "user", "two"), message("a2", "assistant", "done two"), message("u3", "user", "active")];
     const range = selectCompressibleRange(entries, [block("u1", "a1")], 50_000, 1, 0, true, 0);
@@ -534,12 +561,15 @@ describe("virtual range compression", () => {
     expect(JSON.stringify(result[2])).toContain("completed phase summary");
   });
 
-  it("creates multiple blocks in one pass when one range cannot free enough", async () => {
+  it("creates multiple blocks in one pass, largest islands first", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    // Turn sizes are deliberately distinct and NOT chronological: t2 (~8.75K)
+    // is the largest, then t3 (~8K), then t1 (~7K). Largest-island-first must
+    // consume t2 then t3 in one pass, leaving t1 last.
     const entries = [
-      message("u1", "user", "x".repeat(30_000)), message("a1", "assistant", "done one"),
-      message("u2", "user", "y".repeat(30_000)), message("a2", "assistant", "done two"),
-      message("u3", "user", "z".repeat(30_000)), message("a3", "assistant", "done three"),
+      message("u1", "user", "x".repeat(28_000)), message("a1", "assistant", "done one"),
+      message("u2", "user", "y".repeat(35_000)), message("a2", "assistant", "done two"),
+      message("u3", "user", "z".repeat(32_000)), message("a3", "assistant", "done three"),
       message("u4", "user", "active"),
     ];
     const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
@@ -550,9 +580,8 @@ describe("virtual range compression", () => {
     expect(relief.created.length).toBeGreaterThanOrEqual(2);
     expect(relief.freedTokens).toBeGreaterThanOrEqual(16_000);
     expect(blocks).toHaveLength(relief.created.length);
-    // Ranges must be disjoint and chronological.
-    expect(relief.created[0].startEntryId).toBe("u1");
-    expect(relief.created[1].startEntryId).toBe("u2");
+    // Ranges must be disjoint and consumed largest-island-first.
+    expect(relief.created.map((b) => b.startEntryId)).toEqual(["u2", "u3", "u1"]);
     // Internally bounded ranges produce one consolidated transcript card.
     const receipts = appended.filter(([type]) => type === "dcp-receipt");
     expect(receipts).toHaveLength(1);

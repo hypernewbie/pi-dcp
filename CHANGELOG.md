@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.24
+
+- Largest-island-first + floor target (100K): manual/auto passes now aim at `min(threshold+headroom, 100K)` and pick the biggest closed historical islands first, so 250K → ~100K in one pass.
+
 ## 0.8.23
 
 - Unify estimator (Pi content-only), retire orphaned blocks on all paths, honest receipts and vctx-est double-count fix. Net-negative summaries (e.g., imfoan) now rejected.

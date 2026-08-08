@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { parse as parseJsonc, type ParseError } from "jsonc-parser";
-import type { DcpConfig, LoadedConfig, PartialDcpConfig, PiCompactionSettings } from "./types.ts";
+import type { ContextReliefConfig, DcpConfig, LoadedConfig, PartialDcpConfig, PiCompactionSettings } from "./types.ts";
 
 const GLOBAL_AGENT_DIR = join(homedir(), ".pi", "agent");
 const GLOBAL_CONFIG_PATH = join(GLOBAL_AGENT_DIR, "dcp.json");
@@ -72,6 +72,7 @@ export const DEFAULT_CONFIG: DcpConfig = {
     enabled: true,
     triggerPercent: null,
     targetHeadroomTokens: 60_000,
+    targetFloorTokens: 100_000,
     maxChunkInputTokens: 60_000,
     maxChunkSummaryTokens: 25_000,
     exactEvidenceTokens: 8_000,
@@ -245,6 +246,12 @@ function normalizeConfig(input: PartialDcpConfig, warnings: string[]): DcpConfig
     merged.contextRelief.targetHeadroomTokens,
     DEFAULT_CONFIG.contextRelief.targetHeadroomTokens,
     "contextRelief.targetHeadroomTokens",
+    warnings,
+  );
+  merged.contextRelief.targetFloorTokens = normalizeInteger(
+    merged.contextRelief.targetFloorTokens,
+    DEFAULT_CONFIG.contextRelief.targetFloorTokens,
+    "contextRelief.targetFloorTokens",
     warnings,
   );
   merged.contextRelief.maxChunkInputTokens = normalizeInteger(
@@ -428,4 +435,21 @@ export function resolveEffectiveThreshold(
   const candidates = [fromPercent, absolute].filter((v): v is number => v !== null);
   if (candidates.length === 0) return null;
   return Math.min(...candidates);
+}
+
+/**
+ * Free-token target for a relief pass. Aims to land at
+ * min(threshold + headroom, targetFloorTokens): the floor dominates when usage
+ * is far above the threshold, so a 250K session targets the ~100K floor in one
+ * large pass instead of stopping at a shallow fold just above threshold.
+ * Falls back to bare headroom when no threshold or usage is available.
+ */
+export function computeReliefFreeTarget(
+  usageTokens: number | null | undefined,
+  threshold: number | null,
+  relief: ContextReliefConfig,
+): number {
+  if (usageTokens == null || threshold === null) return relief.targetHeadroomTokens;
+  const targetCeiling = Math.min(threshold + relief.targetHeadroomTokens, relief.targetFloorTokens);
+  return Math.max(0, usageTokens - targetCeiling);
 }

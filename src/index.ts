@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { Box, Text } from "@earendil-works/pi-tui";
-import { loadConfig, loadPiCompactionSettings, resolveEffectiveThreshold, validateThreshold } from "./config.ts";
+import { loadConfig, loadPiCompactionSettings, resolveEffectiveThreshold, validateThreshold, computeReliefFreeTarget } from "./config.ts";
 import { createTriggerState } from "./state.ts";
 import {
   shouldTriggerCompaction,
@@ -156,9 +156,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
             state.config.triggers.endOfTurn.tokenThresholdAbsolute,
             usage.contextWindow,
           );
-          const freeTarget = usage.tokens != null && threshold !== null
-            ? Math.max(0, usage.tokens - threshold) + state.config.contextRelief.targetHeadroomTokens
-            : state.config.contextRelief.targetHeadroomTokens;
+          const freeTarget = computeReliefFreeTarget(usage.tokens, threshold, state.config.contextRelief);
           const relief = await relieveContextPressure(
             pi,
             ctx,
@@ -231,12 +229,17 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
       // Free enough to get back under the trigger plus the configured headroom,
       // not just one range: real pressure usually needs several bounded folds.
+      // The floor target (min(threshold + headroom, targetFloorTokens))
+      // dominates when usage is far above threshold, so a 250K session aims at
+      // the ~100K floor in one pass instead of a shallow fold just above
+      // threshold. The growth throttle stays as is: the larger freeTarget
+      // simply makes this single pass larger.
       const threshold = resolveEffectiveThreshold(
         state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
         state.config.triggers.endOfTurn.tokenThresholdAbsolute,
         usage.contextWindow,
       );
-      const freeTarget = Math.max(0, usage.tokens - (threshold ?? usage.tokens)) + state.config.contextRelief.targetHeadroomTokens;
+      const freeTarget = computeReliefFreeTarget(usage.tokens, threshold, state.config.contextRelief);
       const relief = await relieveContextPressure(
         pi,
         ctx,
