@@ -687,8 +687,8 @@ describe("projection persistence", () => {
     const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
     await dcpCommand.handler!("status", ctx);
     const out = notified.join("\n");
-    expect(out).toContain("vctx (est. next request)");
-    const m = out.match(/vctx \(est\. next request\): ~([\d,.]+) tokens/);
+    expect(out).toContain("vctx (est)");
+    const m = out.match(/vctx \(est\): ~([\d,.]+)/);
     expect(m).not.toBeNull();
     const est = Number(m![1].replace(/,/g, ""));
     // 900_000 - (70_000 raw - 9_000 summary) = 839_000, not the 9_000 summary size.
