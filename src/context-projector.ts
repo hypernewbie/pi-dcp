@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
+import { estimateTokens, sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { VirtualCompressionBlock } from "./types.ts";
 
@@ -126,7 +126,7 @@ export function measureProjectedTokens(
     const projected = projectVirtualBlocksWithInfo(contextMessages, branch, blocks);
     let total = 0;
     for (const message of projected.messages) {
-      total += estimateMessageTokens(message);
+      total += estimateTokens(message);
     }
     return total;
   } catch {
@@ -160,19 +160,11 @@ export function refreshProjectedContext(
     const projected = projectVirtualBlocksWithInfo(contextMessages, branch, blocks);
     let total = 0;
     for (const message of projected.messages) {
-      total += estimateMessageTokens(message);
+      total += estimateTokens(message);
     }
     return { projectedTokens: total, appliedBlocks: projected.appliedBlocks, contextWindow };
   } catch {
     return { projectedTokens: 0, appliedBlocks: 0, contextWindow };
-  }
-}
-
-function estimateMessageTokens(message: AgentMessage): number {
-  try {
-    return JSON.stringify(message).length / 4;
-  } catch {
-    return 0;
   }
 }
 

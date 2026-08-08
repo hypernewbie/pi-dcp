@@ -7,7 +7,7 @@ vi.mock("@earendil-works/pi-ai/compat", () => ({ completeSimple: (...args: unkno
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { projectVirtualBlocks } from "../src/context-projector.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, relieveContextPressure, selectExactEvidence } from "../src/virtual-blocks.ts";
-import { entryRangeCanBeReplaced, projectVirtualBlocksWithInfo } from "../src/context-projector.ts";
+import { entryRangeCanBeReplaced, projectVirtualBlocksWithInfo, refreshProjectedContext } from "../src/context-projector.ts";
 import { MIN_RANGE_RAW_TOKENS, selectCompressibleRange } from "../src/range-selector.ts";
 import { estimateTextTokens } from "../src/utils.ts";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -361,6 +361,16 @@ describe("virtual range compression", () => {
     const result = projectVirtualBlocks(raw, entries, [block("u1", "a1")]);
     expect(result).toHaveLength(2);
     expect(JSON.stringify(result[0])).toContain("completed phase summary");
+  });
+
+  it("measures projected context from message content, not serialized metadata", () => {
+    const old = message("u1", "user", "old");
+    ((old as any).message as any).metadata = "m".repeat(100_000);
+    const entries = [old, message("a1", "assistant", "done"), message("u2", "user", "current")];
+    const result = refreshProjectedContext(entries, [block("u1", "a1")], 1_000_000);
+    expect(result.appliedBlocks).toBe(1);
+    expect(Number.isInteger(result.projectedTokens)).toBe(true);
+    expect(result.projectedTokens).toBeLessThan(100);
   });
 
   it("persists the block and its user-facing receipt as separate custom entries", () => {

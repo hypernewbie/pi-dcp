@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.13
+
+- Fixed projected-context measurements after compaction. Immediate status and growth-throttle measurements now use Pi's token estimator instead of counting serialized message metadata, which could report impossible values such as vctx exceeding the context window by multiple times.
+- Added a regression test for metadata-driven measurement inflation.
+
 ## 0.8.12
 
 - Tests lock in the threshold semantics: the displayed `thresholds:` line is always the static config value, but the actual trigger check (and the displayed `context:` line) uses the projected (vctx) value. DCP and Pi's native compaction always see the same projected reality, so neither can win a race the other didn't see.
