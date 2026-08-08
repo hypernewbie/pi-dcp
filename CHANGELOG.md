@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.21
+
+- Fix 240k `notReplaceable` bug: the accumulator could pick a historical range that splits a tool call/result pair, which the projector then rejects. Now it verifies the accumulation is closed before returning and falls back to the largest single closed turn.
+
 ## 0.8.20
 
 - Creation-stage diag: now also reports why a found range was rejected (notReplaceable / promptTooLarge / netReliefFail etc).

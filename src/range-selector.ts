@@ -90,7 +90,12 @@ export function selectCompressibleRange(
   }
 
   if (selected.length > 0 && startIndex >= 0 && endIndex >= 0 && estimated >= minRangeRawTokens) {
-    return makeRange(entries, selected, startIndex, endIndex, estimated);
+    // The accumulation must be projectable; otherwise it will be rejected by
+    // entryRangeCanBeReplaced and the whole compact will claim nothing.
+    if (isClosedRange(entries, startIndex, endIndex)) {
+      return makeRange(entries, selected, startIndex, endIndex, estimated);
+    }
+    // Not projectable (split tool call) — fall through to single-turn fallback.
   }
 
   // Fragmentation fallback for manual / large-context sessions: if the
@@ -209,4 +214,18 @@ function makeRange(
 
 function estimateMessageTokens(message: AgentMessage): number {
   return estimateTextTokens(JSON.stringify(message));
+}
+
+function isClosedRange(entries: readonly SessionEntry[], start: number, end: number): boolean {
+  const calls = new Set<string>();
+  const results = new Set<string>();
+  for (let i = start; i <= end; i++) {
+    for (const m of sessionEntryToContextMessages(entries[i])) {
+      if (m.role === "assistant") for (const p of (m.content as any)) if (p.type === "toolCall") calls.add(p.id);
+      if (m.role === "toolResult") results.add((m as any).toolCallId);
+    }
+  }
+  for (const id of calls) if (!results.has(id)) return false;
+  for (const id of results) if (!calls.has(id)) return false;
+  return true;
 }
