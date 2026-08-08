@@ -877,6 +877,50 @@ describe("extension entry point", () => {
     expect(notifiedMessages.some((m) => m.includes("No model available"))).toBe(true);
   });
 
+  it("vetoes native threshold compaction when fresh projected context is below DCP's threshold", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const branch: any[] = [{
+      type: "message",
+      id: "u1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: [{ type: "text", text: "small current context" }], timestamp: Date.now() },
+    }];
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: () => {} },
+      getContextUsage: () => ({ tokens: 999_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: () => {},
+      model: undefined,
+    };
+    for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+    const before = hooks["session_before_compact"]?.[0];
+    if (!before) throw new Error("session_before_compact handler not registered");
+    const event: any = {
+      type: "session_before_compact",
+      preparation: { messagesToSummarize: [], turnPrefixMessages: [], tokensBefore: 999_000, firstKeptEntryId: "u1", fileOps: {} },
+      branchEntries: branch,
+      customInstructions: undefined,
+      reason: "threshold",
+      willRetry: false,
+      signal: new AbortController().signal,
+    };
+    expect(await before(event, ctx)).toEqual({ cancel: true });
+    expect(await before({ ...event, reason: "overflow" }, ctx)).toBeUndefined();
+  });
+
   it("downgrades the receipt to PI NATIVE when the DCP custom summary was requested but Pi used its default", async () => {
     // Regression test for a real bug: handleSessionBeforeCompact can fail (no
     // model, provider error, empty response) and return undefined, in which
