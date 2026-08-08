@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.16
+
+- Fix 240k "nothing to compact" bug. Fragmented history (small islands between existing summaries/compactions) could reset the accumulator before it reached the useful-size threshold, claiming no work even though ~2M tokens of uncovered history existed. Now falls back to the largest single uncovered historical turn before claiming nothing.
+
 ## 0.8.15
 
 - Reverted the native threshold-compaction veto from 0.8.14. Pi already uses provider-reported usage from DCP's projected request after normal successful responses. During error or zero-usage fallback, the extension cannot safely measure Pi's full pending request, so cancelling native compaction could cause repeat cancellations or block needed recovery.

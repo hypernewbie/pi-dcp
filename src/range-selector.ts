@@ -93,6 +93,44 @@ export function selectCompressibleRange(
     return makeRange(entries, selected, startIndex, endIndex, estimated);
   }
 
+  // Fragmentation fallback for manual / large-context sessions: if the
+  // accumulation above failed due to covered/compaction gaps resetting a tiny
+  // island, pick the largest single uncovered historical turn instead of
+  // claiming nothing to compact.
+  {
+    let best: { start: number; end: number; tokens: number } | null = null;
+    for (const range of completeRanges) {
+      const candidate = entries.slice(range.start, range.end + 1);
+      if (candidate.length === 0) continue;
+      const unavailable = candidate.some((entry) => covered.has(entry.id)) ||
+        candidate.some((entry) => entry.type === "compaction" || entry.type === "branch_summary");
+      if (unavailable) continue;
+      const messages = candidate.flatMap((entry) => sessionEntryToContextMessages(entry));
+      if (messages.length === 0) continue;
+      const tokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+      if (tokens > maxInputTokens) continue;
+      if (tokens < 1_000) continue; // avoid summarizing trivial turns
+      // Must be projectable (closed tool pairs).
+      let closed = true;
+      const calls = new Set<string>();
+      const results = new Set<string>();
+      for (const entry of candidate) {
+        for (const m of sessionEntryToContextMessages(entry)) {
+          if (m.role === "assistant") for (const p of (m.content as any)) if (p.type === "toolCall") calls.add(p.id);
+          if (m.role === "toolResult") results.add((m as any).toolCallId);
+        }
+      }
+      for (const id of calls) if (!results.has(id)) { closed = false; break; }
+      if (closed) for (const id of results) if (!calls.has(id)) { closed = false; break; }
+      if (!closed) continue;
+      if (!best || tokens > best.tokens) best = { start: range.start, end: range.end, tokens };
+    }
+    if (best) {
+      const sel = entries.slice(best.start, best.end + 1);
+      return makeRange(entries, [...sel], best.start, best.end, best.tokens);
+    }
+  }
+
   if (!allowActivePrefix) return undefined;
 
   // A single uninterrupted tool run has no completed earlier turn. Keep the
