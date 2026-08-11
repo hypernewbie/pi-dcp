@@ -217,10 +217,10 @@ export interface TriggerState {
    * Run from the next turn_end instead of concurrently with the live turn, so
    * ESC cannot abort the user's summarizer calls and racing the run is impossible.
    * When `compressAfter` is true, the deferred consumer also calls ctx.compact()
-   * after the virtual blocks are created, so /dcp compress pauses the run
-   * cleanly (instead of racing it) and then stops or resumes per the variant.
+   * after the virtual blocks are created. `forceContinue` makes either
+   * `_continue` command send a resume prompt after the relief completes.
    */
-  pendingManualCompact?: { focus: string | undefined; compressAfter: boolean };
+  pendingManualCompact?: { focus: string | undefined; compressAfter: boolean; forceContinue: boolean };
   lastCompaction?: LastCompactionInfo;
 }
 

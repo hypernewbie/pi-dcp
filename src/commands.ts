@@ -1,6 +1,6 @@
 import type { ExtensionCommandContext, ExtensionContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { resolveEffectiveThreshold, computeReliefFreeTarget } from "./config.ts";
-import { triggerCompaction, resetTriggerState } from "./triggers.ts";
+import { triggerCompaction, resetTriggerState, resumeCurrentTask } from "./triggers.ts";
 import { notify, setCompactingWorking } from "./ui.ts";
 import { statsToDisplay } from "./stats.ts";
 import type { RuntimeState } from "./types.ts";
@@ -68,9 +68,6 @@ async function handleVirtualCompact(
     notify(ctx, state.config, "Compact is disabled in configuration", "warning");
     return;
   }
-  if (continueRequested) {
-    notify(ctx, state.config, "Compact does not interrupt a running task; the _continue variant is a no-op here.", "info");
-  }
   if (state.triggerState.isCompacting) return;
   // Defer mid-run rather than race the live turn. Running inline would mean
   // the relief's summarizer calls share the run's abort signal (ESC kills the
@@ -78,7 +75,7 @@ async function handleVirtualCompact(
   // contiguous tool/result boundary may not be safe to cut across until the
   // turn actually ends.
   if (!ctx.isIdle()) {
-    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: false };
+    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: false, forceContinue: continueRequested };
     notify(ctx, state.config, "Agent is busy; compact will run at the end of the current step.", "info");
     return;
   }
@@ -175,6 +172,7 @@ async function handleVirtualCompact(
         diag=` branch=${branch.length} userStarts=${userStarts.length} totalTurns=${totalTurns} compEntries=${branch.filter((e:any)=>e.type==='compaction').length} covered=${covered.size} candidates=${candidates} largest~${Math.round(largest)} unavailable=${unavailable} empty=${empty} tooLarge=${tooLarge} tooSmall=${tooSmall} notClosed=${notClosed}${activeInfo} lastCreate=${String(lastReason).slice(0,120)}`;
       } catch (e:any) { diag=` diagError=${String(e?.message||e).slice(0,120)}`; }
       notify(ctx, state.config, `No completed work was available to compact. (diag:${diag})`, "info");
+      if (continueRequested) resumeCurrentTask(pi, ctx);
       return;
     }
     state.triggerState.turnsSinceCompaction = 0;
@@ -220,6 +218,7 @@ async function handleVirtualCompact(
     setCompactingWorking(ctx, false);
     state.triggerState.isCompacting = false;
   }
+  if (continueRequested) resumeCurrentTask(pi, ctx);
 }
 
 async function handleCompact(
@@ -249,7 +248,7 @@ async function handleCompact(
   // /dcp compress must NOT race the live run. If the agent is mid-run, defer
   // to the next turn_end (it will create virtual blocks then abort cleanly).
   if (!ctx.isIdle()) {
-    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: true };
+    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: true, forceContinue };
     notify(ctx, state.config, "Agent is busy; compress will run at the end of the current step.", "info");
     return;
   }
@@ -424,7 +423,7 @@ async function showHelp(ctx: ExtensionCommandContext, state: RuntimeState): Prom
     "  /dcp stats           Show compaction/pruning stats (current branch)",
     "  /dcp compact [focus] Fold older completed work into a summary without interrupting the task",
     "  /dcp compress [focus] Run full one-shot context compaction with a detailed summary",
-    "  /dcp compact_continue [focus] Alias of /dcp compact; the task is never interrupted",
+    "  /dcp compact_continue [focus] Compact, then resume the task",
     "  /dcp compress_continue [focus] Compress now, then resume the interrupted task afterward",
     "  /dcp threshold <percent|null> <absolute|null> Set dual-threshold for this session only (not saved)",
     "  /dcp enable          Enable pi-dcp for this session",

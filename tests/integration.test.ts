@@ -961,7 +961,7 @@ describe("extension entry point", () => {
     expect(notifiedMessages.some((m) => m.toLowerCase().includes("dcp custom summary did not run"))).toBe(true);
   });
 
-  it("/dcp compact_continue is a documented alias of /dcp compact and never claims to force a resume", async () => {
+  it("/dcp compact_continue resumes the task after virtual compaction", async () => {
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};
     const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
@@ -987,13 +987,11 @@ describe("extension entry point", () => {
     }
 
     const dcpCommand = commands.find((c) => c.name === "dcp")!;
-    // The _continue variant must not throw and must not pretend to start a
-    // compaction. (It used to claim it would force a resume, which is wrong
-    // because the compact family never interrupts the running task.)
+    const sentUserMessages: string[] = [];
+    (mockApi as any).sendUserMessage = (message: string) => { sentUserMessages.push(message); };
     await dcpCommand.handler!("compact_continue", ctx);
-    const compactContinueNotices = notifiedMessages.filter((m) => m.includes("no-op"));
-    expect(compactContinueNotices.length).toBe(1);
-    // And it must never have asked Pi to compact (which would abort a run).
+    expect(sentUserMessages).toEqual(["Resuming from context compression, continue current task"]);
+    // Virtual compact still must never ask Pi to compact (which would abort a run).
     expect((mockApi as any).compactCallCount ?? 0).toBe(0);
   });
 

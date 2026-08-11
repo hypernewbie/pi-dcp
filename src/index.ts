@@ -7,6 +7,7 @@ import {
   shouldTriggerCompaction,
   recordCompactionCompleted,
   resetTriggerState,
+  resumeCurrentTask,
 } from "./triggers.ts";
 import { registerCommands } from "./commands.ts";
 import { registerSessionReaderTool } from "./session-reader-tool.ts";
@@ -140,7 +141,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
           state,
           projectionRef,
           pendingManual.focus,
-          false,
+          pendingManual.forceContinue,
         );
         return;
       }
@@ -213,6 +214,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
           state.triggerState.isCompacting = false;
         }
       }
+      if (pendingManual.forceContinue) resumeCurrentTask(pi, ctx);
       return;
     }
 

@@ -10,6 +10,11 @@ import { notify, debug } from "./ui.ts";
 // of stopping cold. Gated by triggers.endOfTurn.autoContinue (default true).
 const AUTO_CONTINUE_PROMPT = "Resuming from context compression, continue current task";
 
+/** Resume only when no other user input is already waiting. */
+export function resumeCurrentTask(pi: ExtensionAPI, ctx: ExtensionContext): void {
+  if (!ctx.hasPendingMessages()) pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
+}
+
 export function shouldTriggerCompaction(
   config: DcpConfig,
   state: TriggerState,
@@ -77,9 +82,7 @@ export function triggerCompaction(
       // forceContinue resolves the explicit /dcp compress_continue case: the
       // user's run was just aborted by ctx.compact() so we re-prompt to pick
       // up where they left off. A plain /dcp compress never auto-resumes.
-      if (forceContinue && !ctx.hasPendingMessages()) {
-        pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
-      }
+      if (forceContinue) resumeCurrentTask(pi, ctx);
     },
     onError: (error) => {
       state.isCompacting = false;
