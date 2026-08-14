@@ -417,7 +417,7 @@ describe("/dcp compact: mid-run deferral", () => {
 // ============================================================================
 
 describe("/dcp compress: aborting path", () => {
-  it("defers mid-run to turn_end, then creates blocks and aborts", async () => {
+  it("defers mid-run to turn_end, then runs the one-shot compaction (no virtual summaries)", async () => {
     const branch = [
       userMessage("u1", "x".repeat(200_000)),
       assistantMessage("a1", "done"),
@@ -430,6 +430,7 @@ describe("/dcp compress: aborting path", () => {
     });
 
     await dcpCommand.handler!("compress", ctx);
+    // Deferred mid-run: no summarizer call, no abort yet.
     expect(completeSimpleMock.mock.calls.length).toBe(0);
     expect(notified.some((m) => m.includes("end of the current step"))).toBe(true);
     expect((ctx as any).compactCallCount ?? 0).toBe(0);
@@ -437,20 +438,23 @@ describe("/dcp compress: aborting path", () => {
     ctx.isIdle = () => true;
     for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
 
-    expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+    // One-shot: the aborting compaction ran, and the range summarizer never
+    // produced virtual blocks before it.
+    expect(completeSimpleMock.mock.calls.length).toBe(0);
     expect((ctx as any).compactCallCount).toBe(1);
   });
 
-  it("creates blocks BEFORE calling ctx.compact (no race)", async () => {
+  it("calls ctx.compact directly with no virtual range summary model calls (one-shot)", async () => {
     const branch = [
       userMessage("u1", "x".repeat(200_000)),
       assistantMessage("a1", "done"),
       userMessage("u2", "current"),
     ];
-    const { dcpCommand, ctx, hooks } = await setupExtension({ branch, usageTokens: 900_000, idle: true });
+    const { dcpCommand, ctx } = await setupExtension({ branch, usageTokens: 900_000, idle: true });
     await dcpCommand.handler!("compress", ctx);
-    // After compress: blocks were created (summarizer called) AND abort happened.
-    expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+    // One-shot compress: no virtual range summary model calls at all, and the
+    // aborting compaction runs exactly once.
+    expect(completeSimpleMock.mock.calls.length).toBe(0);
     expect((ctx as any).compactCallCount).toBe(1);
   });
 });

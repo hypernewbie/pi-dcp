@@ -233,9 +233,10 @@ async function handleCompact(
     notify(ctx, state.config, "pi-dcp is disabled", "warning");
     return;
   }
-  // Honest warning: compress creates virtual blocks then aborts the run. Pi's
-  // compaction then summarizes the raw history, which can retire existing blocks
-  // whose entry ranges are no longer in the active context. Tell the user.
+  // Honest warning: /dcp compress aborts the run, and Pi's compaction rewrites
+  // the raw history. Existing summaries whose entry ranges are no longer in the
+  // active context are retired then (see the session_compact handler), so warn
+  // the user up front.
   if (state.virtualBlocks.length > 0) {
     const count = state.virtualBlocks.length;
     notify(
@@ -246,94 +247,31 @@ async function handleCompact(
     );
   }
   // /dcp compress must NOT race the live run. If the agent is mid-run, defer
-  // to the next turn_end (it will create virtual blocks then abort cleanly).
+  // to the next turn_end (it will then run the one-shot compaction cleanly).
   if (!ctx.isIdle()) {
     state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: true, forceContinue };
     notify(ctx, state.config, "Agent is busy; compress will run at the end of the current step.", "info");
     return;
   }
-  await runCompressWithVirtualBlocks(pi, ctx, state, projectionRef, args.trim() || undefined, forceContinue);
+  await runCompress(pi, ctx, state, args.trim() || undefined, forceContinue);
 }
 
 /**
- * Create virtual blocks from the current history, then call ctx.compact()
- * (which aborts the live run). The virtual blocks are persisted as custom
- * session entries BEFORE the abort, so they survive the compaction and are
- * still projected in via the context hook for the next request - the surgical
- * part of OpenCode DCP. The abort is Pi's one-shot compaction with DCP's
- * structured custom summary. forceContinue controls whether the interrupted
- * run is resumed after the compaction completes.
+ * One-shot compaction for /dcp compress (and compress_continue): it goes
+ * straight to Pi's ctx.compact() with DCP's structured custom summary hook
+ * (session_before_compact) and the user-supplied focus. No virtual summary
+ * blocks are created here — Pi itself summarizes the raw history, so no range
+ * summary model call ever happens before ctx.compact. forceContinue controls
+ * whether the interrupted run resumes after the compaction completes
+ * (compress_continue).
  */
-export async function runCompressWithVirtualBlocks(
+export async function runCompress(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   state: RuntimeState,
-  projectionRef: VirtualUsageRef,
   focus: string | undefined,
   forceContinue: boolean,
 ): Promise<void> {
-  if (state.triggerState.isCompacting) return;
-  state.triggerState.isCompacting = true;
-  setCompactingWorking(ctx, true);
-  try {
-    state.virtualBlocks = rebuildVirtualBlocks(ctx.sessionManager.getBranch());
-    const usage = ctx.getContextUsage();
-    const threshold = resolveEffectiveThreshold(
-      state.config.contextRelief.triggerPercent ?? state.config.triggers.endOfTurn.tokenThresholdPercent,
-      state.config.triggers.endOfTurn.tokenThresholdAbsolute,
-      usage?.contextWindow ?? 0,
-    );
-    // Floor target: min(threshold + headroom, targetFloorTokens) — see
-    // computeReliefFreeTarget. Deep pressure aims at the ~25K floor.
-    const freeTarget = computeReliefFreeTarget(usage?.tokens, threshold, state.config.contextRelief);
-    const relief = await relieveContextPressure(
-      pi,
-      ctx,
-      state.config,
-      state.protection,
-      state.virtualBlocks,
-      focus,
-      pi.getThinkingLevel(),
-      freeTarget,
-      state.config.notification !== "off",
-    );
-    if (relief.created.length > 0) {
-      const refresh = refreshProjectedContext(ctx.sessionManager.buildContextEntries(), state.virtualBlocks, usage?.contextWindow ?? 0);
-      if (refresh.projectedTokens > 0) {
-        state.lastProjection = {
-          projectedTokens: refresh.projectedTokens,
-          contextWindow: usage?.contextWindow ?? 0,
-          appliedBlocks: refresh.appliedBlocks,
-          timestamp: Date.now(),
-        };
-        projectionRef.current = state.lastProjection;
-        state.triggerState.tokensAtLastCompaction = refresh.projectedTokens;
-      }
-      // SAFETY: if the projection failed for ALL created blocks (appliedBlocks
-      // === 0), the blocks are persisted but useless - the raw history will go
-      // out anyway and the model context will overflow. Retire the blocks
-      // immediately so the user is not exposed to a silent failure, matching
-      // the guard in handleVirtualCompact.
-      if (refresh.appliedBlocks === 0) {
-        for (const block of relief.created) {
-          retireVirtualBlock(pi, block.id);
-        }
-        state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
-        notify(
-          ctx,
-          state.config,
-          `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
-          "warning",
-        );
-      }
-      notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
-    }
-  } finally {
-    setCompactingWorking(ctx, false);
-    state.triggerState.isCompacting = false;
-  }
-  // Now abort the run. The virtual blocks are already persisted and survive
-  // the compaction; the context hook projects them in for the next request.
   triggerCompaction(pi, ctx, state.config, state.triggerState, focus, "dcp-command", { forceContinue });
 }
 

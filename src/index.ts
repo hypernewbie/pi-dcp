@@ -128,21 +128,15 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     const pendingManual = state.triggerState.pendingManualCompact;
     if (pendingManual) {
       state.triggerState.pendingManualCompact = undefined;
-      // /dcp compress (deferred mid-run): create virtual blocks then abort the
-      // run via ctx.compact(). The blocks are persisted before the abort, so
-      // they survive the compaction and are projected in via the context hook
-      // for the next request. The variant (compress vs compress_continue)
-      // controls whether the interrupted run resumes after the abort.
+      // /dcp compress (deferred mid-run): run the one-shot compaction via
+      // ctx.compact(). Pi's compaction rewrites the raw history and DCP's
+      // custom summary hook (session_before_compact) produces the structured
+      // summary; no virtual summary model call happens before ctx.compact. The
+      // variant (compress vs compress_continue) controls whether the
+      // interrupted run resumes after the abort.
       if (pendingManual.compressAfter) {
-        const { runCompressWithVirtualBlocks } = await import("./commands.ts");
-        await runCompressWithVirtualBlocks(
-          pi,
-          ctx,
-          state,
-          projectionRef,
-          pendingManual.focus,
-          pendingManual.forceContinue,
-        );
+        const { runCompress } = await import("./commands.ts");
+        await runCompress(pi, ctx, state, pendingManual.focus, pendingManual.forceContinue);
         return;
       }
       if (state.triggerState.isCompacting) return;

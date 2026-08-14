@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.27
+
+- `/dcp compress` is one-shot again: it goes straight to Pi's `ctx.compact()` with DCP's custom summary hook and the focus argument, and never creates virtual range summaries before the abort. Deferred mid-run it still runs at the next turn_end, and `compress_continue` still resumes the task after the compaction completes.
+- `/dcp compact` relief now plans all candidate ranges up front and summarizes them concurrently (at most 3 model calls in flight, `SUMMARY_CONCURRENCY`) instead of up to 10 sequential calls, while keeping disjoint contiguous ranges, the net-relief quality gate, max-10 folding, and the free-target stop.
+
 ## 0.8.26
 
 - Aggressive context relief by default: compact now aims to bring a 250K session all the way down to a ~25K floor in one pass (was ~100K), frees up to 10 ranges per pass (was 6), and accepts bigger per-range input (100K) while keeping summaries tighter (10K) and exact evidence smaller (4K). Same honest quality gate and 35K active working set.

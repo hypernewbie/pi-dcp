@@ -1,4 +1,5 @@
 import { completeSimple } from "@earendil-works/pi-ai/compat";
+import type { Model } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core";
 import {
   convertToLlm,
@@ -136,10 +137,49 @@ const MIN_NET_RELIEF_TOKENS = 1_000;
 const MIN_NET_RELIEF_RATIO = 0.25;
 
 /**
+ * Bounded concurrency for the model calls that summarize planned ranges. Each
+ * call is a separate provider completion; firing all 10 at once would spike
+ * provider load and token spend. 3 keeps the pass fast without ever having
+ * more than a handful of completions in flight.
+ */
+const SUMMARY_CONCURRENCY = 3;
+
+/**
+ * Run `worker` over `items` with at most `concurrency` promises in flight.
+ * Results are collected by input index, so callers always receive them in the
+ * original (planned) order regardless of which promise resolved first.
+ */
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const pump = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await worker(items[index], index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => pump()));
+  return results;
+}
+
+/**
  * Create as many bounded summaries as needed to free approximately
- * `freeTargetTokens`, one range at a time. A single range is capped by
- * maxChunkInputTokens, so real pressure (e.g. 300K over threshold) requires
- * several blocks in one pass rather than one under-sized fold.
+ * `freeTargetTokens`. A single range is capped by maxChunkInputTokens, so real
+ * pressure (e.g. 300K over threshold) requires several blocks in one pass
+ * rather than one under-sized fold.
+ *
+ * The pass is now two-phase:
+ *   1. PLAN — select up to MAX_BLOCKS_PER_RELIEF disjoint contiguous ranges
+ *      from ONE branch snapshot, reserving each selected span with a
+ *      placeholder block so later selections can never overlap it.
+ *   2. SUMMARIZE — complete the planned ranges with bounded concurrency
+ *      (SUMMARY_CONCURRENCY at most), then persist and count them in planned
+ *      order. Failed or net-negative summaries are simply omitted; receipts
+ *      and freedTokens only ever count successful blocks.
  *
  * freedTokens (the pass-stop signal) is accumulated in Pi's honest
  * content-only units (chars/4, see estimateMessageTokens): raw range tokens
@@ -170,31 +210,51 @@ export async function relieveContextPressure(
     typeof ctx.sessionManager.buildContextEntries === "function"
       ? measureProjectedTokens(ctx.sessionManager.buildContextEntries(), blocks)
       : 0;
-  for (let i = 0; i < MAX_BLOCKS_PER_RELIEF; i++) {
-    if (created.length > 0 && freedTokens >= freeTargetTokens) break;
-    // Active-prefix relief is the last resort for a single uninterrupted run,
-    // never an escalation after completed history was already folded this pass.
-    const block = await createVirtualBlock(pi, ctx, config, protection, blocks, focus, thinkingLevel, created.length === 0);
-    if (!block) break;
-    appendVirtualBlock(pi, block);
-    blocks.push(block);
-    created.push(block);
-    freedTokens += Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
-    // Debug cross-check: the projected wire delta after applying the new block
-    // should approximate the estimated raw-to-summary delta. A large divergence
-    // means the estimator and the projector disagree about this range (message
-    // drift, block supersession, or a broken projection) and the pass-stop
-    // signal is less trustworthy than the projected number.
-    if (projectedBefore > 0) {
-      const projectedAfter = measureProjectedTokens(ctx.sessionManager.buildContextEntries(), blocks);
-      const projectedDelta = projectedBefore - projectedAfter;
-      const estimatedDelta = Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
-      if (projectedDelta > 0 && Math.abs(projectedDelta - estimatedDelta) / projectedDelta > 0.3) {
-        debug(
-          ctx,
-          config,
-          `relief divergence: projected delta ${Math.round(projectedDelta)} vs estimated ${Math.round(estimatedDelta)} (block ${block.id})`,
-        );
+
+  const model = resolveSummaryModel(ctx, config);
+  if (model && typeof ctx.sessionManager.buildContextEntries === "function") {
+    const { outputLimit, modelInputLimit } = resolveSummaryLimits(model, config);
+    const planned = planCompressibleRanges(
+      ctx,
+      config,
+      blocks,
+      Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit),
+      Math.min(config.contextRelief.targetHeadroomTokens, modelInputLimit),
+      freeTargetTokens,
+    );
+    if (planned.length > 0) {
+      // Summarize with bounded concurrency. Each worker only touches its own
+      // pre-selected range, so live-block state is never mutated while the
+      // provider requests are in flight.
+      const results = await mapWithConcurrency(planned, SUMMARY_CONCURRENCY, (range) =>
+        summarizeRange(ctx, config, protection, range, focus, thinkingLevel, model, outputLimit),
+      );
+      // Assemble in deterministic planned order after all calls completed;
+      // failed or net-negative summaries are omitted from blocks, receipts,
+      // and freedTokens.
+      for (const block of results) {
+        if (!block) continue;
+        appendVirtualBlock(pi, block);
+        blocks.push(block);
+        created.push(block);
+        freedTokens += Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
+        // Debug cross-check: the projected wire delta after applying the new
+        // block should approximate the estimated raw-to-summary delta. A large
+        // divergence means the estimator and the projector disagree about this
+        // range (message drift, block supersession, or a broken projection) and
+        // the pass-stop signal is less trustworthy than the projected number.
+        if (projectedBefore > 0) {
+          const projectedAfter = measureProjectedTokens(ctx.sessionManager.buildContextEntries(), blocks);
+          const projectedDelta = projectedBefore - projectedAfter;
+          const estimatedDelta = Math.max(0, block.estimatedRawTokens - block.estimatedBlockTokens);
+          if (projectedDelta > 0 && Math.abs(projectedDelta - estimatedDelta) / projectedDelta > 0.3) {
+            debug(
+              ctx,
+              config,
+              `relief divergence: projected delta ${Math.round(projectedDelta)} vs estimated ${Math.round(estimatedDelta)} (block ${block.id})`,
+            );
+          }
+        }
       }
     }
   }
@@ -205,6 +265,105 @@ export async function relieveContextPressure(
     });
   }
   return { created, freedTokens };
+}
+
+/**
+ * PLAN phase: from ONE branch snapshot, select up to MAX_BLOCKS_PER_RELIEF
+ * disjoint contiguous candidate ranges. Every selected span is reserved by a
+ * placeholder block pushed into `reserved`, so a later selection can never
+ * overlap an earlier one (selectCompressibleRange treats reserved blocks as
+ * already-covered history). Only ranges the projector can actually replace are
+ * planned — a span that would split a tool call from its result would waste a
+ * summary call.
+ *
+ * The free-target intent is preserved as closely as possible: planning stops
+ * once the estimated net relief (raw minus a deterministic upper bound of the
+ * summary block, see estimatePlannedBlockTokens) covers `freeTargetTokens`.
+ * Summary quality is only known after the model returns, so the plan may still
+ * contain ranges whose summary later fails or nets negative — those are
+ * omitted at assembly time, never planned unsafely.
+ */
+function planCompressibleRanges(
+  ctx: ExtensionContext,
+  config: DcpConfig,
+  blocks: readonly VirtualCompressionBlock[],
+  maxInputTokens: number,
+  targetTokens: number,
+  freeTargetTokens: number,
+): VirtualRange[] {
+  const branch = ctx.sessionManager.buildContextEntries();
+  const reserved: VirtualCompressionBlock[] = [...blocks];
+  const planned: VirtualRange[] = [];
+  let freedEstimate = 0;
+  for (let i = 0; i < MAX_BLOCKS_PER_RELIEF; i++) {
+    if (planned.length > 0 && freedEstimate >= freeTargetTokens) break;
+    // Active-prefix relief is the last resort for a single uninterrupted run,
+    // never an escalation after completed history was already folded this pass.
+    const range = selectCompressibleRange(
+      branch,
+      reserved,
+      maxInputTokens,
+      targetTokens,
+      config.contextRelief.activeWorkingSetTokens,
+      planned.length === 0,
+    );
+    if (!range) {
+      (globalThis as any).__dcp_lastCreateReason = `no range (branch=${branch.length} blocks=${reserved.length} maxInput=${maxInputTokens})`;
+      break;
+    }
+    if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) {
+      (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens} -> notReplaceable`;
+      break;
+    }
+    planned.push(range);
+    reserved.push(placeholderBlockFor(range));
+    freedEstimate += Math.max(0, range.estimatedRawTokens - estimatePlannedBlockTokens(range, config));
+  }
+  return planned;
+}
+
+function placeholderBlockFor(range: VirtualRange): VirtualCompressionBlock {
+  // selectCompressibleRange only reads startEntryId/endEntryId (to mark the
+  // covered span); the rest is inert until a real block is created.
+  return {
+    version: 1,
+    id: `dcp-plan-${range.startEntryId}-${range.endEntryId}`,
+    startEntryId: range.startEntryId,
+    endEntryId: range.endEntryId,
+    anchorEntryId: range.startEntryId,
+    rangeKind: range.kind,
+    messagesCompressed: 0,
+    toolsCompressed: 0,
+    summary: "",
+    exactEvidence: "",
+    preservedUserMessages: [],
+    estimatedRawTokens: range.estimatedRawTokens,
+    retainedRawTokens: range.retainedRawTokens,
+    estimatedBlockTokens: 0,
+    active: true,
+    createdAt: Date.now(),
+  };
+}
+
+/**
+ * Deterministic upper bound of what a summary block will weigh, used ONLY to
+ * stop planning early once the planned net-relief estimate covers the free
+ * target. No model call is involved: the block is dominated by the preserved
+ * user prompts (each capped at preservedUserMessageTokens) plus the summary
+ * text (bounded by maxChunkSummaryTokens; exact evidence adds at most
+ * exactEvidenceTokens but is usually absent). Over-estimating slightly only
+ * means one extra range gets planned; it can never create an unsafe block.
+ */
+function estimatePlannedBlockTokens(range: VirtualRange, config: DcpConfig): number {
+  let preserved = 0;
+  for (const text of collectRealUserMessages(range.messages)) {
+    preserved += Math.min(estimateTextTokens(text), config.contextRelief.preservedUserMessageTokens);
+  }
+  const summaryAllowance = Math.min(
+    config.contextRelief.maxChunkSummaryTokens,
+    Math.max(1_000, Math.ceil(range.estimatedRawTokens / 4)),
+  );
+  return preserved + summaryAllowance;
 }
 
 export async function createVirtualBlock(
@@ -219,21 +378,10 @@ export async function createVirtualBlock(
 ): Promise<VirtualCompressionBlock | undefined> {
   if (typeof ctx.sessionManager.buildContextEntries !== "function") return undefined;
 
-  let model = ctx.model;
-  if (config.compaction.summaryModel) {
-    const resolved = resolveModelBySpec(ctx, config.compaction.summaryModel);
-    if (resolved) model = resolved;
-  }
+  const model = resolveSummaryModel(ctx, config);
   if (!model) return undefined;
 
-  const outputLimit = typeof model.maxTokens === "number" && model.maxTokens > 0
-    ? Math.min(config.contextRelief.maxChunkSummaryTokens, model.maxTokens)
-    : config.contextRelief.maxChunkSummaryTokens;
-  // Never build a standalone summary request larger than its target model can
-  // accept after reserving the requested completion space.
-  const modelInputLimit = typeof model.contextWindow === "number" && model.contextWindow > 0
-    ? Math.max(1, model.contextWindow - outputLimit)
-    : config.contextRelief.maxChunkInputTokens;
+  const { outputLimit, modelInputLimit } = resolveSummaryLimits(model, config);
   const branch = ctx.sessionManager.buildContextEntries();
   const range = selectCompressibleRange(
     branch,
@@ -247,12 +395,37 @@ export async function createVirtualBlock(
     (globalThis as any).__dcp_lastCreateReason = `no range (branch=${branch.length} blocks=${blocks.length} maxInput=${Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit)})`;
     return undefined;
   }
-  (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens}`;
 
   // Refuse before spending a summary call: if the projector could not replace
   // this exact range, the block would be created, persisted, and then rejected
   // on every future request forever.
-  if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) { (globalThis as any).__dcp_lastCreateReason += " -> notReplaceable"; return undefined; }
+  if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) {
+    (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens} -> notReplaceable`;
+    return undefined;
+  }
+
+  return summarizeRange(ctx, config, protection, range, focus, thinkingLevel, model, outputLimit);
+}
+
+/**
+ * SUMMARIZE phase: build and complete ONE already-selected range's summary.
+ * This never re-selects a range and never re-reads the live branch, so
+ * concurrent calls all work from the same planning snapshot and cannot
+ * interfere with each other. Returns undefined on any failure (provider error,
+ * empty/thinking-only summary, prompt overflow, or a summary that fails the
+ * net-relief quality gate).
+ */
+export async function summarizeRange(
+  ctx: ExtensionContext,
+  config: DcpConfig,
+  protection: ResolvedProtection,
+  range: VirtualRange,
+  focus: string | undefined,
+  thinkingLevel: ThinkingLevel,
+  model: Model<any>,
+  outputLimit: number,
+): Promise<VirtualCompressionBlock | undefined> {
+  (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens}`;
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
   if (!auth.ok) { (globalThis as any).__dcp_lastCreateReason += " -> noAuth"; return undefined; }
@@ -333,6 +506,27 @@ export async function createVirtualBlock(
   }
 }
 
+function resolveSummaryModel(ctx: ExtensionContext, config: DcpConfig): Model<any> | undefined {
+  let model = ctx.model;
+  if (config.compaction.summaryModel) {
+    const resolved = resolveModelBySpec(ctx, config.compaction.summaryModel);
+    if (resolved) model = resolved;
+  }
+  return model;
+}
+
+function resolveSummaryLimits(model: Model<any>, config: DcpConfig): { outputLimit: number; modelInputLimit: number } {
+  const outputLimit = typeof model.maxTokens === "number" && model.maxTokens > 0
+    ? Math.min(config.contextRelief.maxChunkSummaryTokens, model.maxTokens)
+    : config.contextRelief.maxChunkSummaryTokens;
+  // Never build a standalone summary request larger than its target model can
+  // accept after reserving the requested completion space.
+  const modelInputLimit = typeof model.contextWindow === "number" && model.contextWindow > 0
+    ? Math.max(1, model.contextWindow - outputLimit)
+    : config.contextRelief.maxChunkInputTokens;
+  return { outputLimit, modelInputLimit };
+}
+
 export function selectExactEvidence(messages: AgentMessage[], protectedText: string, maxTokens: number): string {
   const errors: string[] = [];
 
@@ -370,7 +564,7 @@ function countRangeItems(messages: AgentMessage[]): { messages: number; tools: n
   return { messages: messagesCompressed, tools: toolsCompressed };
 }
 
-function resolveModelBySpec(ctx: ExtensionContext, spec: string) {
+function resolveModelBySpec(ctx: ExtensionContext, spec: string): Model<any> | undefined {
   const slash = spec.indexOf("/");
   if (slash <= 0) return undefined;
   return ctx.modelRegistry.find(spec.slice(0, slash), spec.slice(slash + 1));

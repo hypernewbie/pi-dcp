@@ -216,9 +216,10 @@ export interface TriggerState {
    * Deferred manual compaction action requested while the agent was mid-run.
    * Run from the next turn_end instead of concurrently with the live turn, so
    * ESC cannot abort the user's summarizer calls and racing the run is impossible.
-   * When `compressAfter` is true, the deferred consumer also calls ctx.compact()
-   * after the virtual blocks are created. `forceContinue` makes either
-   * `_continue` command send a resume prompt after the relief completes.
+   * When `compressAfter` is true, the deferred consumer runs the one-shot
+   * compaction (ctx.compact() with DCP's custom summary; no virtual blocks).
+   * `forceContinue` makes either `_continue` command send a resume prompt after
+   * the compaction completes.
    */
   pendingManualCompact?: { focus: string | undefined; compressAfter: boolean; forceContinue: boolean };
   lastCompaction?: LastCompactionInfo;

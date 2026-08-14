@@ -55,7 +55,13 @@ function block(startEntryId: string, endEntryId: string): VirtualCompressionBloc
 }
 
 describe("virtual range compression", () => {
-  beforeEach(() => completeSimpleMock.mockReset());
+  // NOTE: block body on purpose. `() => mock.mockReset()` would return the mock
+  // itself, which vitest treats as a beforeEach cleanup callback and CALLS after
+  // the test; a test that left a pending mockImplementation would hang that
+  // cleanup call for the full hook timeout.
+  beforeEach(() => {
+    completeSimpleMock.mockReset();
+  });
 
   it("creates a durable-ready block with bounded summary, evidence, and preserved prompts", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "phase summary" }] });
@@ -608,6 +614,71 @@ describe("virtual range compression", () => {
     const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any, 1_000_000, false);
     expect(relief.created).toHaveLength(10);
     expect(relief.created).toHaveLength(new Set(relief.created.map((b) => b.startEntryId)).size);
+  });
+
+  it("summarizes planned ranges concurrently with at most 3 in flight, then appends in planned order", async () => {
+    // Focused concurrency regression: the relief pass must PLAN all candidate
+    // ranges first (disjoint, from one branch snapshot) and then run the model
+    // calls in bounded groups of SUMMARY_CONCURRENCY = 3 - never 10 at once.
+    // Deferred completions let the test prove that no more than 3 range
+    // summary calls start before a deferred completion resolves.
+    const deferred: Array<(value: { stopReason: string; content: Array<{ type: string; text: string }> }) => void> = [];
+    completeSimpleMock.mockImplementation(() => new Promise((resolve) => deferred.push(resolve)));
+    const entries: SessionEntry[] = [];
+    for (let i = 1; i <= 6; i++) {
+      entries.push(message(`u${i}`, "user", "x".repeat(28_000)));
+      entries.push(message(`a${i}`, "assistant", `done ${i}`));
+    }
+    entries.push(message("u7", "user", "active"));
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
+    const appended: unknown[][] = [];
+    const pi = { appendEntry: (...args: unknown[]) => appended.push(args) } as any;
+    const reliefPromise = relieveContextPressure(pi, ctx, config, resolveProtection(config.pruning, config.compaction, [] as string[], [] as string[]), [], undefined, "off" as any, 1_000_000, false);
+
+    // Flush microtasks: the first wave of workers starts. Exactly SUMMARY_CONCURRENCY
+    // completions may be in flight; the rest must still be waiting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deferred.length).toBe(3);
+    expect(completeSimpleMock.mock.calls.length).toBe(3);
+
+    // Resolve the first wave; the next wave starts, still bounded by 3.
+    for (let i = 0; i < 3; i++) deferred[i]({ stopReason: "stop", content: [{ type: "text", text: `summary ${i}` }] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deferred.length).toBe(6);
+    expect(completeSimpleMock.mock.calls.length).toBe(6);
+
+    // Resolve the second wave; no planned ranges remain.
+    for (let i = 3; i < 6; i++) deferred[i]({ stopReason: "stop", content: [{ type: "text", text: `summary ${i}` }] });
+    const relief = await reliefPromise;
+
+    // All six succeeded and are appended in deterministic planned order.
+    expect(relief.created.map((b) => b.startEntryId)).toEqual(["u1", "u2", "u3", "u4", "u5", "u6"]);
+    expect(appended.filter(([type]) => type === "dcp-context-range.v1").map(([, data]) => (data as any).block.startEntryId))
+      .toEqual(["u1", "u2", "u3", "u4", "u5", "u6"]);
+    expect(relief.freedTokens).toBeGreaterThan(0);
+  });
+
+  it("omits failed or net-negative summaries but keeps the successful planned ranges in order", async () => {
+    // Quality is only known after summaries return: a failed completion in the
+    // middle must not disturb the deterministic planned order of the blocks
+    // that did succeed.
+    completeSimpleMock
+      .mockResolvedValueOnce({ stopReason: "stop", content: [{ type: "text", text: "first ok" }] })
+      .mockResolvedValueOnce({ stopReason: "error", errorMessage: "rate limited", content: [] })
+      .mockResolvedValueOnce({ stopReason: "stop", content: [{ type: "text", text: "third ok" }] });
+    const entries: SessionEntry[] = [
+      message("u1", "user", "x".repeat(28_000)), message("a1", "assistant", "done"),
+      message("u2", "user", "y".repeat(28_000)), message("a2", "assistant", "done"),
+      message("u3", "user", "z".repeat(28_000)), message("a3", "assistant", "done"),
+      message("u4", "user", "active"),
+    ];
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
+    const blocks: VirtualCompressionBlock[] = [];
+    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), blocks, undefined, "off" as any, 1_000_000, false);
+    expect(relief.created.map((b) => b.startEntryId)).toEqual(["u1", "u3"]);
+    expect(blocks.map((b) => b.startEntryId)).toEqual(["u1", "u3"]);
   });
 
   it("does not escalate from historical work into the active turn in one pass", async () => {

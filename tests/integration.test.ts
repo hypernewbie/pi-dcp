@@ -465,14 +465,12 @@ describe("extension entry point", () => {
     expect(contextOutput).toContain("thresholds:");
   });
 
-  it("/dcp compress mid-run deferred to turn_end: creates virtual blocks THEN aborts (no race)", async () => {
-    // The fix: /dcp compress must NOT race the live run. It creates virtual
-    // blocks first (via the existing context magic), persists them, and only
-    // THEN calls ctx.compact() to abort. The virtual blocks survive the abort
-    // (they're custom entries) and are projected in via the context hook for
-    // the next request. If the order were reversed (abort first, blocks after),
-    // the blocks would be useless - they'd be created against a session state
-    // that's already been compacted.
+  it("/dcp compress mid-run deferred to turn_end: one-shot compaction only (no virtual range summaries before ctx.compact)", async () => {
+    // The fix: /dcp compress is one-shot again. It must NOT create virtual
+    // blocks or call the range summarizer at all - it goes straight to
+    // ctx.compact() with DCP's custom summary hook. When typed mid-run it
+    // defers that abort to the next turn_end instead of racing the live run,
+    // and no virtual summary model call may happen before ctx.compact.
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};
     const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
@@ -516,7 +514,7 @@ describe("extension entry point", () => {
 
       const dcpCommand = commands.find((c) => c.name === "dcp")!;
 
-      // Mid-run: defer, don't race.
+      // Mid-run: defer, don't race, don't summarize.
       idle = false;
       notifiedMessages.length = 0;
       await dcpCommand.handler!("compress", ctx);
@@ -525,14 +523,13 @@ describe("extension entry point", () => {
       expect(completeSimpleMock.mock.calls.length).toBe(0);
       expect((ctx as any).compactCallCount ?? 0).toBe(0);
 
-      // Turn ends: the deferred compress runs. Virtual blocks are created FIRST,
-      // then ctx.compact() aborts. The order is critical - blocks must be
-      // persisted before the abort so they survive compaction.
+      // Turn ends: the deferred one-shot compaction runs. The range summarizer
+      // must NEVER run for compress - no virtual summary model call before the
+      // aborting ctx.compact.
       idle = true;
       for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
 
-      // Both ran: the summarizer (to create blocks) AND the abort.
-      expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+      expect(completeSimpleMock.mock.calls.length).toBe(0);
       expect((ctx as any).compactCallCount).toBe(1);
     } finally {
       completeSimpleMock.mockReset();
@@ -687,8 +684,9 @@ describe("extension entry point", () => {
     ctx.modelRegistry = { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) };
     notifiedMessages.length = 0;
     await dcpCommand.handler!("compress", ctx);
-    // compress aborted with no model, so no block was created. We need to
-    // run /dcp compact with a mocking summarizer to actually create a block.
+    // compress is one-shot: it creates no virtual blocks itself (that is what
+    // /dcp compact is for) and simply aborts via ctx.compact(). We need a real
+    // block to make the retirement warning fire, so create one via /dcp compact.
     void fakeBlock; // referenced for documentation; the real block comes from /dcp compact below.
 
     // Now create a real block via /dcp compact.
@@ -959,6 +957,65 @@ describe("extension entry point", () => {
     }
 
     expect(notifiedMessages.some((m) => m.toLowerCase().includes("dcp custom summary did not run"))).toBe(true);
+  });
+
+  it("/dcp compress_continue resumes the task after the one-shot compaction completes", async () => {
+    // One-shot compress_continue: goes straight to ctx.compact() (no virtual
+    // range summaries) and, once the compaction completes, sends Pi the resume
+    // prompt so the interrupted task keeps going.
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    mod.default(mockApi as any);
+
+    const branch: any[] = [
+      { type: "message", id: "u1", parentId: null, timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "x".repeat(200_000) }], timestamp: 1 } },
+      { type: "message", id: "a1", parentId: "u1", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "done" }], timestamp: 2 } },
+      { type: "message", id: "u2", parentId: "a1", timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "text", text: "current request" }], timestamp: 3 } },
+    ];
+
+    completeSimpleMock.mockReset();
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
+    const sentUserMessages: string[] = [];
+    (mockApi as any).sendUserMessage = (message: string) => { sentUserMessages.push(message); };
+
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: () => {} },
+      getContextUsage: () => ({ tokens: 900_000, contextWindow: 1_000_000 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      compact: function (opts: any) {
+        (ctx as any).compactCallCount = ((ctx as any).compactCallCount ?? 0) + 1;
+        // Pi fires onComplete after the compaction finishes.
+        queueMicrotask(() => opts.onComplete?.());
+      },
+      model: { reasoning: false, maxTokens: 8_000, contextWindow: 1_000_000, provider: "p", id: "m" },
+      modelRegistry: { find: () => undefined, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "k" }) },
+      signal: undefined,
+      getThinkingLevel: () => "off",
+    };
+
+    try {
+      for (const h of hooks["session_start"] ?? []) await h({ type: "session_start", reason: "new" }, ctx);
+
+      const dcpCommand = commands.find((c) => c.name === "dcp")!;
+      await dcpCommand.handler!("compress_continue", ctx);
+
+      // One-shot: compaction ran, and no virtual range summary was ever made.
+      expect((ctx as any).compactCallCount).toBe(1);
+      expect(completeSimpleMock.mock.calls.length).toBe(0);
+      // The resume prompt is sent only after the compaction completes.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(sentUserMessages).toEqual(["Resuming from context compression, continue current task"]);
+    } finally {
+      completeSimpleMock.mockReset();
+    }
   });
 
   it("/dcp compact_continue resumes the task after virtual compaction", async () => {
