@@ -91,7 +91,7 @@ async function handleVirtualCompact(
     );
     // Aim for min(threshold + headroom, targetFloorTokens): when usage is far
     // above the threshold (e.g. 250K), the floor dominates and the pass targets
-    // the ~100K floor instead of stopping at a shallow fold above threshold.
+    // the ~25K floor instead of stopping at a shallow fold above threshold.
     const freeTarget = computeReliefFreeTarget(usage?.tokens, threshold, state.config.contextRelief);
     const relief = await relieveContextPressure(
       pi,
@@ -130,7 +130,7 @@ async function handleVirtualCompact(
           const msgs=cand.flatMap((en:any)=> sessionEntryToContextMessages(en));
           if(msgs.length===0){ empty++; continue; }
           const t=msgs.reduce((sum:number,m:any)=>sum+est(m),0);
-          if(t>60000){ tooLarge++; if(t>largest) largest=t; continue; }
+          if(t>100000){ tooLarge++; if(t>largest) largest=t; continue; }
           if(t<1000){ tooSmall++; continue; }
           // closed check
           const calls=new Set<string>(), results=new Set<string>();
@@ -164,7 +164,7 @@ async function handleVirtualCompact(
             if(en.type!=='message'||en.message.role!=='toolResult') continue;
             if(open.size>0) continue;
             const suffix=activeTokens-running;
-            if(suffix>=35000 && running<=60000){ prefixEnd=i; prefixTokens=running; }
+            if(suffix>=35000 && running<=100000){ prefixEnd=i; prefixTokens=running; }
           }
           activeInfo=` activeLen=${activeEntries.length} activeTokens~${Math.round(activeTokens)} prefixEnd=${prefixEnd} prefixTokens~${Math.round(prefixTokens)}`;
         }
@@ -284,7 +284,7 @@ export async function runCompressWithVirtualBlocks(
       usage?.contextWindow ?? 0,
     );
     // Floor target: min(threshold + headroom, targetFloorTokens) — see
-    // computeReliefFreeTarget. Deep pressure aims at the ~100K floor.
+    // computeReliefFreeTarget. Deep pressure aims at the ~25K floor.
     const freeTarget = computeReliefFreeTarget(usage?.tokens, threshold, state.config.contextRelief);
     const relief = await relieveContextPressure(
       pi,

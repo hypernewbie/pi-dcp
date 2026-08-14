@@ -126,7 +126,12 @@ export function retireVirtualBlock(pi: ExtensionAPI, blockId: string): void {
   pi.appendEntry(DCP_BLOCK_RETIRED_TYPE, { version: 1, blockId });
 }
 
-const MAX_BLOCKS_PER_RELIEF = 6;
+// Up to 10 bounded folds per relief pass. Deliberately generous: with the
+// 25K floor target, a 250K context needs to free ~225K, and history often
+// arrives as many small islands (separated by earlier summaries/compactions),
+// so a handful of 6 was too shallow — 10 lets one pass chase the 25K floor
+// even when no single island is huge.
+const MAX_BLOCKS_PER_RELIEF = 10;
 const MIN_NET_RELIEF_TOKENS = 1_000;
 const MIN_NET_RELIEF_RATIO = 0.25;
 

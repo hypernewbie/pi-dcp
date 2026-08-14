@@ -590,6 +590,26 @@ describe("virtual range compression", () => {
     expect(receiptText).toContain("Raw context after this pass");
   });
 
+  it("folds at most 10 ranges per pass so a 250K session can still chase the 25K floor across many small islands", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
+    // 12 identical closed islands (~7K tokens each: under the 9K chunk cap,
+    // but two islands together exceed it). With a huge free target, the pass
+    // must fold exactly MAX_BLOCKS_PER_RELIEF = 10 of them: the old 6-block
+    // cap would have stopped at 6 and left a 250K session far above its 25K
+    // floor when history is split into islands.
+    const entries: SessionEntry[] = [];
+    for (let i = 1; i <= 12; i++) {
+      entries.push(message(`u${i}`, "user", "x".repeat(28_000)));
+      entries.push(message(`a${i}`, "assistant", `done ${i}`));
+    }
+    entries.push(message("u13", "user", "active"));
+    const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
+    const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any, 1_000_000, false);
+    expect(relief.created).toHaveLength(10);
+    expect(relief.created).toHaveLength(new Set(relief.created.map((b) => b.startEntryId)).size);
+  });
+
   it("does not escalate from historical work into the active turn in one pass", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "short summary" }] });
     const entries = [

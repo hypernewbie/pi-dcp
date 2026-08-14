@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.26
+
+- Aggressive context relief by default: compact now aims to bring a 250K session all the way down to a ~25K floor in one pass (was ~100K), frees up to 10 ranges per pass (was 6), and accepts bigger per-range input (100K) while keeping summaries tighter (10K) and exact evidence smaller (4K). Same honest quality gate and 35K active working set.
+
 ## 0.8.25
 
 - Fix `/dcp compact_continue`: it now sends Pi a resume prompt after virtual compaction. Deferred `compress_continue` now preserves that same resume request.

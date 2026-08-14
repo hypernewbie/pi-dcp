@@ -70,9 +70,10 @@ Example:
   "contextRelief": {
     "enabled": true,
     "targetHeadroomTokens": 60000,
-    "maxChunkInputTokens": 60000,
-    "maxChunkSummaryTokens": 25000,
-    "exactEvidenceTokens": 8000,
+    "targetFloorTokens": 25000,
+    "maxChunkInputTokens": 100000,
+    "maxChunkSummaryTokens": 10000,
+    "exactEvidenceTokens": 4000,
     "preservedUserMessageTokens": 2000,
     "activeWorkingSetTokens": 35000
   },

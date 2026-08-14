@@ -160,9 +160,11 @@ describe("/dcp compact: range selection", () => {
     expect(notified.some((m) => m.includes("Compacted") && m.includes("range"))).toBe(true);
   });
 
-  it("creates a block from the largest completed turn, not the oldest", async () => {
-    // Largest-island-first: the 200K-char turn (~50K tokens) must be selected
-    // over the older 100K-char turn (~25K) even though it is newer.
+  it("creates a block from the largest island (both turns merged under the 100K chunk budget), not the oldest alone", async () => {
+    // Largest-island-first with the aggressive default: the two completed
+    // turns are one contiguous island (~75K tokens) that now fits under the
+    // 100K chunk cap, so the WHOLE island is folded in one block - not just
+    // the newer, larger turn (the old 60K cap forced a single-turn selection).
     const branch = [
       userMessage("u1", "x".repeat(100_000)),
       assistantMessage("a1", "first done"),
@@ -180,7 +182,7 @@ describe("/dcp compact: range selection", () => {
     await dcpCommand.handler!("compact", ctx);
     expect(notified.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
     expect(appendedBlocks.length).toBeGreaterThan(0);
-    expect(appendedBlocks[0].startEntryId).toBe("u2");
+    expect(appendedBlocks[0].startEntryId).toBe("u1");
     expect(appendedBlocks[0].endEntryId).toBe("a2");
   });
 

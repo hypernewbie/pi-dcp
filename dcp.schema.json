@@ -81,10 +81,10 @@
         "enabled": { "type": "boolean", "default": true },
         "triggerPercent": { "type": ["number", "null"], "minimum": 0, "maximum": 100, "default": null },
         "targetHeadroomTokens": { "type": "integer", "minimum": 0, "default": 60000 },
-        "targetFloorTokens": { "type": "integer", "minimum": 0, "default": 100000 },
-        "maxChunkInputTokens": { "type": "integer", "minimum": 1, "default": 60000 },
-        "maxChunkSummaryTokens": { "type": "integer", "minimum": 1, "default": 25000 },
-        "exactEvidenceTokens": { "type": "integer", "minimum": 0, "default": 8000 },
+        "targetFloorTokens": { "type": "integer", "minimum": 0, "default": 25000 },
+        "maxChunkInputTokens": { "type": "integer", "minimum": 1, "default": 100000 },
+        "maxChunkSummaryTokens": { "type": "integer", "minimum": 1, "default": 10000 },
+        "exactEvidenceTokens": { "type": "integer", "minimum": 0, "default": 4000 },
         "preservedUserMessageTokens": { "type": "integer", "minimum": 1000, "default": 2000 },
         "activeWorkingSetTokens": { "type": "integer", "minimum": 0, "default": 35000 }
       }

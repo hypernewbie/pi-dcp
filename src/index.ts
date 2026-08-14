@@ -233,7 +233,7 @@ export default function dcpExtension(pi: ExtensionAPI): void {
       // not just one range: real pressure usually needs several bounded folds.
       // The floor target (min(threshold + headroom, targetFloorTokens))
       // dominates when usage is far above threshold, so a 250K session aims at
-      // the ~100K floor in one pass instead of a shallow fold just above
+      // the ~25K floor in one pass instead of a shallow fold just above
       // threshold. The growth throttle stays as is: the larger freeTarget
       // simply makes this single pass larger.
       const threshold = resolveEffectiveThreshold(

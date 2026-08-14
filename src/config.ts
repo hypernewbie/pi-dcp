@@ -72,10 +72,10 @@ export const DEFAULT_CONFIG: DcpConfig = {
     enabled: true,
     triggerPercent: null,
     targetHeadroomTokens: 60_000,
-    targetFloorTokens: 100_000,
-    maxChunkInputTokens: 60_000,
-    maxChunkSummaryTokens: 25_000,
-    exactEvidenceTokens: 8_000,
+    targetFloorTokens: 25_000,
+    maxChunkInputTokens: 100_000,
+    maxChunkSummaryTokens: 10_000,
+    exactEvidenceTokens: 4_000,
     preservedUserMessageTokens: 2_000,
     activeWorkingSetTokens: 35_000,
   },
@@ -440,7 +440,7 @@ export function resolveEffectiveThreshold(
 /**
  * Free-token target for a relief pass. Aims to land at
  * min(threshold + headroom, targetFloorTokens): the floor dominates when usage
- * is far above the threshold, so a 250K session targets the ~100K floor in one
+ * is far above the threshold, so a 250K session targets the ~25K floor in one
  * large pass instead of stopping at a shallow fold just above threshold.
  * Falls back to bare headroom when no threshold or usage is available.
  */
