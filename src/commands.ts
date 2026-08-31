@@ -1,4 +1,5 @@
 import type { ExtensionCommandContext, ExtensionContext, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
 import { resolveEffectiveThreshold, computeReliefFreeTarget } from "./config.ts";
 import { triggerCompaction, resetTriggerState, resumeCurrentTask } from "./triggers.ts";
 import { notify, setCompactingWorking } from "./ui.ts";
@@ -8,6 +9,22 @@ import { rebuildVirtualBlocks, relieveContextPressure, retireVirtualBlock } from
 import { measureProjectedTokens, refreshProjectedContext } from "./context-projector.ts";
 import { isVirtualContextUsageInstalled } from "./context-magic.ts";
 import type { VirtualUsageRef } from "./context-magic.ts";
+
+/** True while an unfinished tool-call group can still mutate the active turn. */
+export function hasOpenToolCalls(ctx: { sessionManager: { buildContextEntries?: () => readonly any[] } }): boolean {
+  if (typeof ctx.sessionManager.buildContextEntries !== "function") return false;
+  const open = new Set<string>();
+  for (const entry of ctx.sessionManager.buildContextEntries()) {
+    for (const message of sessionEntryToContextMessages(entry)) {
+      if (message.role === "assistant") {
+        for (const part of message.content) if (part.type === "toolCall") open.add(part.id);
+      } else if (message.role === "toolResult") {
+        open.delete(message.toolCallId);
+      }
+    }
+  }
+  return open.size > 0;
+}
 
 export function registerCommands(pi: ExtensionAPI, state: RuntimeState, projectionRef: VirtualUsageRef): void {
   pi.registerCommand("dcp", {
@@ -74,9 +91,9 @@ async function handleVirtualCompact(
   // user's compact with a misleading "no work available" message) and the next
   // contiguous tool/result boundary may not be safe to cut across until the
   // turn actually ends.
-  if (!ctx.isIdle()) {
+  if (!ctx.isIdle() || hasOpenToolCalls(ctx)) {
     state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: false, forceContinue: continueRequested };
-    notify(ctx, state.config, "Agent is busy; compact will run at the end of the current step.", "info");
+    notify(ctx, state.config, "Agent is busy; compact will run at the end of the current step, after active tool work closes.", "info");
     return;
   }
   state.triggerState.isCompacting = true;

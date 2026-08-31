@@ -399,6 +399,23 @@ describe("/dcp compact: mid-run deferral", () => {
     expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
   });
 
+  it("waits for an open tool group even if the host reports idle", async () => {
+    const branch = [
+      userMessage("u1", "x".repeat(200_000)),
+      assistantMessage("a1", "done"),
+      userMessage("u2", "current"),
+      assistantMessage("a2", "running tool", [{ id: "tc1", name: "bash" }]),
+    ];
+    const { dcpCommand, ctx, hooks } = await setupExtension({ branch, usageTokens: 900_000, idle: true });
+    await dcpCommand.handler!("compact", ctx);
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+    expect(completeSimpleMock).not.toHaveBeenCalled();
+    branch.push(toolResult("r1", "tc1", "finished"));
+    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
+    expect(completeSimpleMock).toHaveBeenCalled();
+  });
+
   it("does NOT defer when the agent is idle", async () => {
     const branch = [
       userMessage("u1", "x".repeat(200_000)),

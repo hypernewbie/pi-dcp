@@ -9,7 +9,7 @@ import {
   resetTriggerState,
   resumeCurrentTask,
 } from "./triggers.ts";
-import { registerCommands } from "./commands.ts";
+import { hasOpenToolCalls, registerCommands } from "./commands.ts";
 import { registerSessionReaderTool } from "./session-reader-tool.ts";
 import { handleSessionBeforeCompact } from "./compaction/custom-summary.ts";
 import { resolveProtection } from "./protection.ts";
@@ -121,6 +121,10 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     // first, and the auto-trigger resumes on the next turn_end after cooldown.
     const pendingManual = state.triggerState.pendingManualCompact;
     if (pendingManual) {
+      // Do not race a pending manual compact against tool results that are
+      // still arriving. Keep the request pending until the active tool group
+      // is closed, then compact one stable DCP range.
+      if (!ctx.isIdle() || hasOpenToolCalls(ctx)) return;
       state.triggerState.pendingManualCompact = undefined;
       // /dcp compress (deferred mid-run): run the one-shot compaction via
       // ctx.compact(). Pi's compaction rewrites the raw history and DCP's
