@@ -205,25 +205,28 @@ describe("virtual range compression", () => {
     const ctx = { model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
     expect(completeSimpleMock).toHaveBeenCalledOnce();
-    expect(result).toBeUndefined();
+    expect(result).toBeDefined();
+    expect(result!.estimatedBlockTokens).toBeLessThan(result!.estimatedRawTokens);
   });
 
-  it("rejects a summary with negligible net relief", async () => {
+  it("uses the DCP reducer when a summary has negligible net relief", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(21_000) }] });
     const entries = [message("u1", "user", "brief request"), message("a1", "assistant", "x".repeat(24_000)), message("u2", "user", "current")];
     const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
     expect(completeSimpleMock).toHaveBeenCalledOnce();
-    expect(result).toBeUndefined();
+    expect(result).toBeDefined();
+    expect(result!.estimatedBlockTokens).toBeLessThan(result!.estimatedRawTokens);
   });
 
-  it("rejects a summary that saves less than 25 percent of its range", async () => {
+  it("uses the DCP reducer when a summary saves less than 25 percent", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(64_000) }] });
     const entries = [message("u1", "user", "brief request"), message("a1", "assistant", "x".repeat(80_000)), message("u2", "user", "current")];
     const ctx = { model: { reasoning: false, maxTokens: 100_000 }, signal: undefined, modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) }, sessionManager: { buildContextEntries: () => entries } } as any;
     const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, DEFAULT_CONFIG, resolveProtection(DEFAULT_CONFIG.pruning, DEFAULT_CONFIG.compaction, [], []), [], undefined, "off" as any);
     expect(completeSimpleMock).toHaveBeenCalledOnce();
-    expect(result).toBeUndefined();
+    expect(result).toBeDefined();
+    expect(result!.estimatedBlockTokens).toBeLessThan(result!.estimatedRawTokens);
   });
 
   it("fails closed for provider errors and does not activate a block", async () => {
@@ -701,10 +704,9 @@ describe("virtual range compression", () => {
     expect(relief.freedTokens).toBeGreaterThan(0);
   });
 
-  it("omits failed or net-negative summaries but keeps the successful planned ranges in order", async () => {
-    // Quality is only known after summaries return: a failed completion in the
-    // middle must not disturb the deterministic planned order of the blocks
-    // that did succeed.
+  it("uses the DCP reducer for a failed summary and keeps planned ranges in order", async () => {
+    // A failed completion in the middle uses the DCP reducer without
+    // disturbing deterministic planned order.
     completeSimpleMock
       .mockResolvedValueOnce({ stopReason: "stop", content: [{ type: "text", text: "first ok" }] })
       .mockResolvedValueOnce({ stopReason: "error", errorMessage: "rate limited", content: [] })
@@ -719,8 +721,8 @@ describe("virtual range compression", () => {
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 9_000, targetHeadroomTokens: 9_000 } };
     const blocks: VirtualCompressionBlock[] = [];
     const relief = await relieveContextPressure({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), blocks, undefined, "off" as any, 1_000_000, false);
-    expect(relief.created.map((b) => b.startEntryId)).toEqual(["u1", "u3"]);
-    expect(blocks.map((b) => b.startEntryId)).toEqual(["u1", "u3"]);
+    expect(relief.created.map((b) => b.startEntryId)).toEqual(["u1", "u2", "u3"]);
+    expect(blocks.map((b) => b.startEntryId)).toEqual(["u1", "u2", "u3"]);
   });
 
   it("does not escalate from historical work into the active turn in one pass", async () => {
@@ -777,7 +779,7 @@ describe("virtual range compression", () => {
     expect(completeSimpleMock).toHaveBeenCalledOnce();
   });
 
-  it("rejects an active-prefix summary larger than the span it replaces", async () => {
+  it("uses the DCP reducer when an active-prefix summary is larger than its span", async () => {
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "s".repeat(30_000) }] });
     const assistantWithToolCall = (id: string, toolCallId: string, text: string): SessionEntry => ({
       type: "message",
@@ -811,7 +813,8 @@ describe("virtual range compression", () => {
     const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, activeWorkingSetTokens: 5_000 } };
     const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any);
     expect(completeSimpleMock).toHaveBeenCalledOnce();
-    expect(result).toBeUndefined();
+    expect(result).toBeDefined();
+    expect(result!.estimatedBlockTokens).toBeLessThan(result!.estimatedRawTokens);
   });
 
   it("makes 50 consecutive DCP compact passes strictly smaller", async () => {

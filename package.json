@@ -1,6 +1,6 @@
 {
   "name": "pi-dcp",
-  "version": "0.8.29",
+  "version": "0.8.30",
   "type": "module",
   "description": "Dynamic Context Pruning for Pi — configurable compaction triggers and custom summaries",
   "keywords": [

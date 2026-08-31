@@ -212,8 +212,10 @@ export async function relieveContextPressure(
       : 0;
 
   const model = resolveSummaryModel(ctx, config);
-  if (model && typeof ctx.sessionManager.buildContextEntries === "function") {
-    const { outputLimit, modelInputLimit } = resolveSummaryLimits(model, config);
+  if (typeof ctx.sessionManager.buildContextEntries === "function") {
+    const { outputLimit, modelInputLimit } = model
+      ? resolveSummaryLimits(model, config)
+      : { outputLimit: config.contextRelief.maxChunkSummaryTokens, modelInputLimit: config.contextRelief.maxChunkInputTokens };
     const planned = planCompressibleRanges(
       ctx,
       config,
@@ -225,9 +227,12 @@ export async function relieveContextPressure(
     if (planned.length > 0) {
       // Summarize with bounded concurrency. Each worker only touches its own
       // pre-selected range, so live-block state is never mutated while the
-      // provider requests are in flight.
+      // provider requests are in flight. If no summary model is available,
+      // use the deterministic DCP reducer instead of leaving raw history.
       const results = await mapWithConcurrency(planned, SUMMARY_CONCURRENCY, (range) =>
-        summarizeRange(ctx, config, protection, range, focus, thinkingLevel, model, outputLimit),
+        model
+          ? summarizeRange(ctx, config, protection, range, focus, thinkingLevel, model, outputLimit)
+          : Promise.resolve(createDeterministicBlock(range, config)),
       );
       // Assemble in deterministic planned order after all calls completed;
       // failed or net-negative summaries are omitted from blocks, receipts,
@@ -408,6 +413,53 @@ export async function createVirtualBlock(
 }
 
 /**
+ * DCP-only emergency reducer used when a provider summary cannot be obtained.
+ * It preserves real user prompts deterministically and records only verifiable
+ * range facts, so an unavailable/failed summary model never leaves a large,
+ * already-safe completed range raw in the provider request.
+ */
+function createDeterministicBlock(
+  range: VirtualRange,
+  config: DcpConfig,
+): VirtualCompressionBlock | undefined {
+  const items = countRangeItems(range.messages);
+  const summary = [
+    "### Goal",
+    "Completed work record.",
+    "",
+    "### Progress",
+    "#### Done",
+    `- Folded ${items.messages} messages and ${items.tools} tool calls from a completed range.`,
+    "",
+    "### Technical Record",
+    "- The detailed transcript was reduced to keep the active work moving.",
+  ].join("\n");
+  const preserved = collectRealUserMessages(range.messages);
+  const full = appendPreservedUserMessages(summary, range.messages, undefined, config.contextRelief.preservedUserMessageTokens);
+  const estimatedBlockTokens = estimateTextTokens(full);
+  const netReliefTokens = range.estimatedRawTokens - estimatedBlockTokens;
+  if (netReliefTokens < MIN_NET_RELIEF_TOKENS || netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) return undefined;
+  return {
+    version: 1,
+    id: `dcp-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    startEntryId: range.startEntryId,
+    endEntryId: range.endEntryId,
+    anchorEntryId: range.startEntryId,
+    rangeKind: range.kind,
+    messagesCompressed: items.messages,
+    toolsCompressed: items.tools,
+    summary: full,
+    exactEvidence: "",
+    preservedUserMessages: preserved,
+    estimatedRawTokens: range.estimatedRawTokens,
+    retainedRawTokens: range.retainedRawTokens,
+    estimatedBlockTokens,
+    active: true,
+    createdAt: Date.now(),
+  };
+}
+
+/**
  * SUMMARIZE phase: build and complete ONE already-selected range's summary.
  * This never re-selects a range and never re-reads the live branch, so
  * concurrent calls all work from the same planning snapshot and cannot
@@ -428,7 +480,7 @@ export async function summarizeRange(
   (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens}`;
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) { (globalThis as any).__dcp_lastCreateReason += " -> noAuth"; return undefined; }
+  if (!auth.ok) { (globalThis as any).__dcp_lastCreateReason += " -> noAuth"; return createDeterministicBlock(range, config); }
 
   const conversationText = serializeConversation(convertToLlm(range.messages));
   const protectedResult = buildProtectedAppendix(range.messages, {
@@ -448,7 +500,7 @@ export async function summarizeRange(
   });
   const reasoning = model.reasoning && thinkingLevel !== "off" ? thinkingLevel : undefined;
   if (typeof model.contextWindow === "number" && model.contextWindow > 0 &&
-      estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) { (globalThis as any).__dcp_lastCreateReason += ` -> promptTooLarge ${estimateTextTokens(userPrompt)}+${outputLimit}>${model.contextWindow}`; return undefined; }
+      estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) { (globalThis as any).__dcp_lastCreateReason += ` -> promptTooLarge ${estimateTextTokens(userPrompt)}+${outputLimit}>${model.contextWindow}`; return createDeterministicBlock(range, config); }
 
   try {
     const response = await completeSimple(
@@ -466,12 +518,12 @@ export async function summarizeRange(
         signal: ctx.signal,
       },
     );
-    if (response.stopReason === "error") { (globalThis as any).__dcp_lastCreateReason += ` -> summaryError ${response.errorMessage||""}`.slice(0,80); return undefined; }
+    if (response.stopReason === "error") { (globalThis as any).__dcp_lastCreateReason += ` -> summaryError ${response.errorMessage||""}`.slice(0,80); return createDeterministicBlock(range, config); }
     const summary = response.content
       .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
       .map((part) => part.text)
       .join("\n").trim();
-    if (!summary || /<\/?think(?:ing)?>/i.test(summary)) { (globalThis as any).__dcp_lastCreateReason += " -> emptyOrThinking"; return undefined; }
+    if (!summary || /<\/?think(?:ing)?>/i.test(summary)) { (globalThis as any).__dcp_lastCreateReason += " -> emptyOrThinking"; return createDeterministicBlock(range, config); }
 
     const preserved = collectRealUserMessages(range.messages);
     const composed = appendPreservedUserMessages(summary, range.messages, undefined, config.contextRelief.preservedUserMessageTokens);
@@ -481,7 +533,7 @@ export async function summarizeRange(
     // Tiny wins do not justify a durable summary or a full model call. Require
     // both meaningful absolute relief and a meaningful fraction of the range.
     if (netReliefTokens < MIN_NET_RELIEF_TOKENS ||
-        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) { (globalThis as any).__dcp_lastCreateReason += ` -> netReliefFail raw~${range.estimatedRawTokens} block~${estimatedBlockTokens} net~${netReliefTokens}`; return undefined; }
+        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) { (globalThis as any).__dcp_lastCreateReason += ` -> netReliefFail raw~${range.estimatedRawTokens} block~${estimatedBlockTokens} net~${netReliefTokens}`; return createDeterministicBlock(range, config); }
     const items = countRangeItems(range.messages);
     return {
       version: 1,
@@ -502,7 +554,7 @@ export async function summarizeRange(
       createdAt: Date.now(),
     };
   } catch {
-    return undefined;
+    return createDeterministicBlock(range, config);
   }
 }
 

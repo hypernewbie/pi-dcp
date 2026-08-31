@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.30
+
+- Make `/dcp compact` DCP-only under summary-model failure: an unavailable, failed, empty, oversized, or low-relief model summary now uses a compact factual DCP record instead of leaving a safe completed range raw. No Pi full compaction.
+
 ## 0.8.29
 
 - Make virtual range projection survive live message drift: DCP now derives the stored range from neighboring entry anchors and applies it only when that replacement makes the request smaller. Added 120 drift cases and a 50-pass strict-reduction regression.

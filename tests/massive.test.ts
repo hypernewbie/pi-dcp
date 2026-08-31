@@ -791,7 +791,7 @@ describe("threshold check uses projected (vctx) context, not raw", () => {
 // ============================================================================
 
 describe("error handling", () => {
-  it("/dcp compact when there is no model surfaces a clear error", async () => {
+  it("/dcp compact uses the DCP reducer when no model is available", async () => {
     const branch = [
       userMessage("u1", "x".repeat(200_000)),
       assistantMessage("a1", "done"),
@@ -800,12 +800,10 @@ describe("error handling", () => {
     const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
     ctx.model = undefined; // override the default the helper installs
     await dcpCommand.handler!("compact", ctx);
-    // With no model, the compact must NOT claim success.
-    const claimedSuccess = notified.some((m) => /Compacted \d+ range/.test(m));
-    expect(claimedSuccess).toBe(false);
+    expect(notified.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
   });
 
-  it("provider errors in the summarizer are surfaced", async () => {
+  it("/dcp compact uses the DCP reducer after a provider error", async () => {
     completeSimpleMock.mockReset();
     completeSimpleMock.mockResolvedValue({ stopReason: "error", errorMessage: "rate limited" } as any);
     const branch = [
@@ -815,9 +813,6 @@ describe("error handling", () => {
     ];
     const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
     await dcpCommand.handler!("compact", ctx);
-    // Either we surface a "no completed work" or the relief simply does not
-    // create blocks; in either case the user must not be told it succeeded.
-    const claimedCompacted = notified.some((m) => /Compacted \d+ range/.test(m));
-    expect(claimedCompacted).toBe(false);
+    expect(notified.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
   });
 });
