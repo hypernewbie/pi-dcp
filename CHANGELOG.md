@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.32
+
+- Make every explicit `_continue` command queue its continuation prompt, even when another user message is already pending.
+
 ## 0.8.31
 
 - Prevent a manual compact from racing active tool output: DCP waits for an open tool group to close, then makes one stable virtual fold. No Pi compaction.

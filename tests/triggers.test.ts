@@ -115,11 +115,11 @@ describe("triggerCompaction forceContinue", () => {
     expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("forceContinue is still blocked by an already-pending message", () => {
+  it("forceContinue queues the continuation even with an already-pending message", () => {
     const { pi, ctx, complete } = makeFakes({ isIdle: true, hasPendingMessages: true });
     const state = createTriggerState();
     triggerCompaction(pi, ctx, DEFAULT_CONFIG, state, undefined, "dcp-command", { forceContinue: true });
     complete();
-    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+    expect(pi.sendUserMessage).toHaveBeenCalledWith("Resuming from context compression, continue current task");
   });
 });

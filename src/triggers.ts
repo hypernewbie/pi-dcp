@@ -10,9 +10,9 @@ import { notify, debug } from "./ui.ts";
 // of stopping cold. Gated by triggers.endOfTurn.autoContinue (default true).
 const AUTO_CONTINUE_PROMPT = "Resuming from context compression, continue current task";
 
-/** Resume only when no other user input is already waiting. */
-export function resumeCurrentTask(pi: ExtensionAPI, ctx: ExtensionContext): void {
-  if (!ctx.hasPendingMessages()) pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
+/** An explicit `_continue` command always queues its continuation prompt. */
+export function resumeCurrentTask(pi: ExtensionAPI, _ctx: ExtensionContext): void {
+  pi.sendUserMessage(AUTO_CONTINUE_PROMPT);
 }
 
 export function shouldTriggerCompaction(
