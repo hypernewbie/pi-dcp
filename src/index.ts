@@ -443,14 +443,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         timestamp: Date.now(),
       };
       projectionRef.current = state.lastProjection;
-      // A projection miss is request-local, not evidence that a durable block
-      // is invalid. Keep it and retry on the next context rebuild; retiring it
-      // here would permanently lose future relief after transient session
-      // reconstruction or message drift. Native session_compact handles the
-      // separate case where Pi has actually removed the source range.
-      if (projection.failedBlockIds.length > 0) {
-        debug(ctx, state.config, `Context summary projection deferred for ${projection.failedBlockIds.length} block(s); will retry.`);
-      }
     } catch (error) {
       // Fail-open: the next request still uses the raw messages. But the vctx
       // display line in /dcp status depends on state.lastProjection, and

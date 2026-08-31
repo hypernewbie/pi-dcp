@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.29
+
+- Make virtual range projection survive live message drift: DCP now derives the stored range from neighboring entry anchors and applies it only when that replacement makes the request smaller. Added 120 drift cases and a 50-pass strict-reduction regression.
+
 ## 0.8.28
 
 - Keep virtual summaries across temporary projection misses. DCP now retries silently instead of discarding a durable summary; only a real native history rewrite silently retires an obsolete range.

@@ -7,7 +7,7 @@ vi.mock("@earendil-works/pi-ai/compat", () => ({ completeSimple: (...args: unkno
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { projectVirtualBlocks } from "../src/context-projector.ts";
 import { appendVirtualBlock, appendVirtualBlockReceipt, createVirtualBlock, rebuildVirtualBlocks, relieveContextPressure, selectExactEvidence } from "../src/virtual-blocks.ts";
-import { entryRangeCanBeReplaced, projectVirtualBlocksWithInfo, refreshProjectedContext } from "../src/context-projector.ts";
+import { entryRangeCanBeReplaced, measureProjectedTokens, projectVirtualBlocksWithInfo, refreshProjectedContext } from "../src/context-projector.ts";
 import { MIN_RANGE_RAW_TOKENS, selectCompressibleRange } from "../src/range-selector.ts";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -488,6 +488,48 @@ describe("virtual range compression", () => {
     expect(JSON.stringify(result[0])).toContain("completed phase summary");
   });
 
+  it("maps and replaces a drifted stored span from its stable entry anchors", () => {
+    const entries = [
+      message("u1", "user", "x".repeat(20_000)),
+      message("a1", "assistant", "stored result"),
+      message("u2", "user", "active request"),
+    ];
+    const raw = [
+      (entries[0] as any).message,
+      { role: "assistant", content: [{ type: "text", text: "repaired result with different text" }], timestamp: Date.now() } as AgentMessage,
+      (entries[2] as any).message,
+    ];
+    const compacted = { ...block("u1", "a1"), summary: "tiny handoff", estimatedBlockTokens: 3 };
+    const result = projectVirtualBlocksWithInfo(raw, entries, [compacted]);
+    expect(result.appliedBlocks).toBe(1);
+    expect(result.messages).toHaveLength(2);
+    expect(JSON.stringify(result.messages[0])).toContain("tiny handoff");
+    expect(JSON.stringify(result.messages[1])).toContain("active request");
+  });
+
+  it.each(Array.from({ length: 120 }, (_, caseNumber) => caseNumber))(
+    "always reduces a large mapped range across drift case %i",
+    (caseNumber) => {
+      const size = 20_000 + (caseNumber % 10) * 4_000;
+      const entries = [
+        message("u1", "user", "u".repeat(size)),
+        message("a1", "assistant", "a".repeat(size)),
+        message("u2", "user", "active request"),
+      ];
+      const raw = entries.map((entry) => (entry as any).message as AgentMessage);
+      const drift = caseNumber % 4;
+      if (drift === 1 || drift === 3) raw[0] = { ...raw[0], content: [{ type: "text", text: "changed user " + "u".repeat(size) }] } as AgentMessage;
+      if (drift === 2 || drift === 3) raw[1] = { ...raw[1], content: [{ type: "text", text: "changed assistant " + "a".repeat(size) }] } as AgentMessage;
+      const compacted = { ...block("u1", "a1"), id: `block-${caseNumber}`, summary: "tiny handoff", estimatedBlockTokens: 3 };
+      const before = raw.reduce((sum, item) => sum + estimateTokens(item), 0);
+      const result = projectVirtualBlocksWithInfo(raw, entries, [compacted]);
+      const after = result.messages.reduce((sum, item) => sum + estimateTokens(item), 0);
+      expect(result.appliedBlocks).toBe(1);
+      expect(after).toBeLessThan(before);
+      expect(JSON.stringify(result.messages[0])).toContain("tiny handoff");
+    },
+  );
+
   it("still projects after a session repair inserted reasoning blocks into assistant turns", () => {
     // Regression test for a real production symptom: "N stored context summaries
     // no longer match this session's history". A session-repair tool (pi-m3fix)
@@ -770,6 +812,42 @@ describe("virtual range compression", () => {
     const result = await createVirtualBlock({ appendEntry: () => {} } as any, ctx, config, resolveProtection(config.pruning, config.compaction, [], []), [], undefined, "off" as any);
     expect(completeSimpleMock).toHaveBeenCalledOnce();
     expect(result).toBeUndefined();
+  });
+
+  it("makes 50 consecutive DCP compact passes strictly smaller", async () => {
+    completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny handoff" }] });
+    const entries: SessionEntry[] = [];
+    for (let i = 0; i < 51; i++) {
+      entries.push(message(`u${i}`, "user", "x".repeat(20_000)));
+      entries.push(message(`a${i}`, "assistant", `done ${i}`));
+    }
+    entries.push(message("active", "user", "current request"));
+    const ctx = {
+      model: { reasoning: false, maxTokens: 100_000, contextWindow: 400_000 },
+      signal: undefined,
+      modelRegistry: { getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "key" }) },
+      sessionManager: { buildContextEntries: () => entries },
+    } as any;
+    const config = { ...DEFAULT_CONFIG, contextRelief: { ...DEFAULT_CONFIG.contextRelief, maxChunkInputTokens: 6_000 } };
+    const blocks: VirtualCompressionBlock[] = [];
+    let previous = measureProjectedTokens(entries, blocks);
+    for (let pass = 0; pass < 50; pass++) {
+      const relief = await relieveContextPressure(
+        { appendEntry: () => {} } as any,
+        ctx,
+        config,
+        resolveProtection(config.pruning, config.compaction, [], []),
+        blocks,
+        undefined,
+        "off" as any,
+        1,
+        false,
+      );
+      expect(relief.created).toHaveLength(1);
+      const next = measureProjectedTokens(entries, blocks);
+      expect(next).toBeLessThan(previous);
+      previous = next;
+    }
   });
 
   it("stops the relief pass once the target is met", async () => {

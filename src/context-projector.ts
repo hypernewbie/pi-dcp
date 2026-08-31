@@ -60,17 +60,31 @@ export function projectVirtualBlocksWithInfo(
 
   const replacements = new Map<number, { end: number; message: AgentMessage; blockId: string }>();
   for (const candidate of candidates) {
-    const span = mappedContiguousSpan(segments, candidate.start, candidate.end);
+    const span = mappedContiguousSpan(segments, candidate.start, candidate.end, contextMessages.length);
     if (!span) {
       failedBlockIds.push(candidate.block.id);
       continue;
+    }
+    // When live messages drifted from their stored text, map the durable entry
+    // span by its neighboring stable anchors. Only use that inferred span when
+    // it still strictly reduces the actual request; never add a summary beside
+    // raw context or replace it for a loss.
+    const replacementMessage = makeBlockMessage(candidate.block);
+    if (span.inferred) {
+      const rawTokens = contextMessages
+        .slice(span.start, span.end + 1)
+        .reduce((sum, message) => sum + estimateTokens(message), 0);
+      if (estimateTokens(replacementMessage) >= rawTokens) {
+        failedBlockIds.push(candidate.block.id);
+        continue;
+      }
     }
     // A newer summary is authoritative if a persisted session contains overlap.
     if ([...replacements.entries()].some(([start, replacement]) => span.start <= replacement.end && span.end >= start)) {
       supersededBlocks++;
       continue;
     }
-    replacements.set(span.start, { end: span.end, message: makeBlockMessage(candidate.block), blockId: candidate.block.id });
+    replacements.set(span.start, { end: span.end, message: replacementMessage, blockId: candidate.block.id });
   }
 
   // Defensive live-pairing guard: a replacement must never orphan a live tool
@@ -217,18 +231,67 @@ function findMessageSequence(actual: AgentMessage[], expected: AgentMessage[], f
   return undefined;
 }
 
-function mappedContiguousSpan(segments: Segment[], start: number, end: number): { start: number; end: number } | undefined {
+function mappedContiguousSpan(
+  segments: Segment[],
+  start: number,
+  end: number,
+  messageCount: number,
+): { start: number; end: number; inferred: boolean } | undefined {
   let first: number | undefined;
   let previousEnd: number | undefined;
+  let firstMappedIndex = -1;
+  let lastMappedIndex = -1;
+  let exact = true;
   for (let i = start; i <= end; i++) {
     const segment = segments[i];
     if (segment.messages.length === 0) continue;
-    if (segment.actualStart === undefined || segment.actualEnd === undefined) return undefined;
-    if (first === undefined) first = segment.actualStart;
-    if (previousEnd !== undefined && segment.actualStart !== previousEnd + 1) return undefined;
+    if (segment.actualStart === undefined || segment.actualEnd === undefined) {
+      exact = false;
+      continue;
+    }
+    if (first === undefined) {
+      first = segment.actualStart;
+      firstMappedIndex = i;
+    }
+    lastMappedIndex = i;
+    if (previousEnd !== undefined && segment.actualStart !== previousEnd + 1) exact = false;
     previousEnd = segment.actualEnd;
   }
-  return first === undefined || previousEnd === undefined ? undefined : { start: first, end: previousEnd };
+  if (exact && first !== undefined && previousEnd !== undefined) {
+    return { start: first, end: previousEnd, inferred: false };
+  }
+
+  // A stored entry can differ from the live request after session repair or a
+  // host transform. Its position is nevertheless stable relative to neighboring
+  // entries that did map. Infer the whole durable entry interval between those
+  // anchors. The caller verifies a real token reduction and the live tool-pair
+  // guard below still rejects any unsafe cut.
+  const hasUnmappedBeforeFirst = firstMappedIndex < 0 || segments.slice(start, firstMappedIndex).some((segment) => segment.messages.length > 0 && segment.actualStart === undefined);
+  const hasUnmappedAfterLast = lastMappedIndex < 0 || segments.slice(lastMappedIndex + 1, end + 1).some((segment) => segment.messages.length > 0 && segment.actualStart === undefined);
+  let inferredStart = hasUnmappedBeforeFirst ? undefined : first;
+  let inferredEnd = hasUnmappedAfterLast ? undefined : previousEnd;
+  if (inferredStart === undefined) {
+    for (let i = start - 1; i >= 0; i--) {
+      const anchor = segments[i];
+      if (anchor?.actualEnd !== undefined) {
+        inferredStart = anchor.actualEnd + 1;
+        break;
+      }
+    }
+    if (inferredStart === undefined && start === 0) inferredStart = 0;
+  }
+  if (inferredEnd === undefined) {
+    for (let i = end + 1; i < segments.length; i++) {
+      const anchor = segments[i];
+      if (anchor?.actualStart !== undefined) {
+        inferredEnd = anchor.actualStart - 1;
+        break;
+      }
+    }
+    if (inferredEnd === undefined && end === segments.length - 1) inferredEnd = messageCount - 1;
+  }
+  if (inferredStart === undefined || inferredEnd === undefined || inferredStart > inferredEnd) return undefined;
+  return { start: inferredStart, end: inferredEnd, inferred: true };
 }
 
 function livePairsStayClosed(
