@@ -1082,6 +1082,42 @@ describe("extension entry point", () => {
     expect(JSON.stringify(result.messages[1])).toContain("active request");
   });
 
+  it("keeps a durable summary after repeated projection misses and applies it when mapping recovers", async () => {
+    const mod = await import(EXTENSION_PATH);
+    const hooks: Record<string, Function[]> = {};
+    const commands: Array<{ name: string; description?: string }> = [];
+    const entryRenderers = new Map<string, Function>();
+    const oldMessage = (id: string, role: string, text: string) => ({ type: "message", id, parentId: null, timestamp: new Date().toISOString(), message: { role, content: [{ type: "text", text }], timestamp: Date.now() } });
+    const branch: any[] = [
+      oldMessage("u1", "user", "old request"),
+      oldMessage("a1", "assistant", "old result"),
+      { type: "custom", id: "b1", parentId: "a1", timestamp: new Date().toISOString(), customType: "dcp-context-range.v1", data: { version: 1, block: { version: 1, id: "block-1", startEntryId: "u1", endEntryId: "a1", anchorEntryId: "u1", rangeKind: "historical", messagesCompressed: 2, toolsCompressed: 0, summary: "old phase preserved", exactEvidence: "", preservedUserMessages: ["old request"], estimatedRawTokens: 20, retainedRawTokens: 30, estimatedBlockTokens: 4, active: true, createdAt: Date.now() } } },
+      oldMessage("u2", "user", "active request"),
+    ];
+    const retired: unknown[] = [];
+    const notices: string[] = [];
+    const mockApi = makeMockApi(hooks, commands, entryRenderers);
+    (mockApi as any).appendEntry = (type: string, data: unknown) => retired.push({ type, data });
+    mod.default(mockApi as any);
+    const ctx: any = {
+      hasUI: true,
+      cwd: process.cwd(),
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => notices.push(message) },
+      getContextUsage: () => ({ tokens: 10, contextWindow: 100 }),
+      sessionManager: { getBranch: () => branch, buildContextEntries: () => branch },
+    };
+    for (const handler of hooks["session_start"] ?? []) await handler({ type: "session_start", reason: "new" }, ctx);
+    const raw = branch.filter((entry) => entry.type === "message").map((entry) => entry.message);
+    const incomplete = [raw[0], raw[2]];
+    await hooks["context"][0]({ type: "context", messages: incomplete }, ctx);
+    await hooks["context"][0]({ type: "context", messages: incomplete }, ctx);
+    expect(retired).toEqual([]);
+    expect(notices.some((message) => message.includes("Discarded") || message.includes("no longer fit this session's history"))).toBe(false);
+    const recovered = await hooks["context"][0]({ type: "context", messages: raw }, ctx);
+    expect(JSON.stringify(recovered.messages[0])).toContain("old phase preserved");
+  });
+
   it("automatic threshold relief does not call Pi's aborting compact primitive", async () => {
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};

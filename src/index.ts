@@ -42,11 +42,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
   // Shared with the live getContextUsage patch so Pi's own footer percentage
   // reflects the projected request instead of the raw session estimate.
   const projectionRef: VirtualUsageRef = {};
-  // Consecutive projection failures per block. A block that cannot be applied
-  // twice in a row is structurally dead (its range was rewritten or split), so
-  // it is retired instead of being retried on every request forever.
-  const blockFailureCounts = new Map<string, number>();
-  const RETIRE_AFTER_CONSECUTIVE_FAILURES = 2;
   installVirtualContextUsage(projectionRef);
 
   registerCommands(pi, state, projectionRef);
@@ -81,7 +76,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
     state.compactionPreview = undefined;
     state.lastProjection = undefined;
     projectionRef.current = undefined;
-    blockFailureCounts.clear();
 
     // Rebuild stats from current branch custom entries
     try {
@@ -449,34 +443,13 @@ export default function dcpExtension(pi: ExtensionAPI): void {
         timestamp: Date.now(),
       };
       projectionRef.current = state.lastProjection;
-      // A superseded overlap is normal (a newer summary replaced an older one)
-      // and is never reported. A genuine failure is only interesting if it
-      // persists: transient branch states can fail one projection harmlessly.
-      const failed = new Set(projection.failedBlockIds);
-      for (const id of [...blockFailureCounts.keys()]) {
-        if (!failed.has(id)) blockFailureCounts.delete(id);
-      }
-      const retiredNow: string[] = [];
-      for (const id of failed) {
-        const count = (blockFailureCounts.get(id) ?? 0) + 1;
-        blockFailureCounts.set(id, count);
-        if (count < RETIRE_AFTER_CONSECUTIVE_FAILURES) continue;
-        try {
-          retireVirtualBlock(pi, id);
-          retiredNow.push(id);
-        } catch {
-          // Retirement is best effort; failing to persist it must not break the request.
-        }
-      }
-      if (retiredNow.length > 0) {
-        for (const id of retiredNow) blockFailureCounts.delete(id);
-        state.virtualBlocks = state.virtualBlocks.filter((block) => !retiredNow.includes(block.id));
-        notify(
-          ctx,
-          state.config,
-          `Discarded ${retiredNow.length} summar${retiredNow.length === 1 ? "y" : "ies"} that no longer fit this session's history. Nothing was lost: the original messages are intact and were sent in full.`,
-          "info",
-        );
+      // A projection miss is request-local, not evidence that a durable block
+      // is invalid. Keep it and retry on the next context rebuild; retiring it
+      // here would permanently lose future relief after transient session
+      // reconstruction or message drift. Native session_compact handles the
+      // separate case where Pi has actually removed the source range.
+      if (projection.failedBlockIds.length > 0) {
+        debug(ctx, state.config, `Context summary projection deferred for ${projection.failedBlockIds.length} block(s); will retry.`);
       }
     } catch (error) {
       // Fail-open: the next request still uses the raw messages. But the vctx

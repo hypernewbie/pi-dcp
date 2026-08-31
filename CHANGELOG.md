@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.28
+
+- Keep virtual summaries across temporary projection misses. DCP now retries silently instead of discarding a durable summary; only a real native history rewrite silently retires an obsolete range.
+
 ## 0.8.27
 
 - `/dcp compress` is one-shot again: it goes straight to Pi's `ctx.compact()` with DCP's custom summary hook and the focus argument, and never creates virtual range summaries before the abort. Deferred mid-run it still runs at the next turn_end, and `compress_continue` still resumes the task after the compaction completes.
