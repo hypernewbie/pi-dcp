@@ -198,6 +198,7 @@ export async function relieveContextPressure(
   thinkingLevel: ThinkingLevel,
   freeTargetTokens: number,
   showReceipts: boolean,
+  allowActivePrefix = true,
 ): Promise<{ created: VirtualCompressionBlock[]; freedTokens: number }> {
   const created: VirtualCompressionBlock[] = [];
   const firstNumber = blocks.length + 1;
@@ -223,6 +224,7 @@ export async function relieveContextPressure(
       Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit),
       Math.min(config.contextRelief.targetHeadroomTokens, modelInputLimit),
       freeTargetTokens,
+      allowActivePrefix,
     );
     if (planned.length > 0) {
       // Summarize with bounded concurrency. Each worker only touches its own
@@ -295,6 +297,7 @@ function planCompressibleRanges(
   maxInputTokens: number,
   targetTokens: number,
   freeTargetTokens: number,
+  allowActivePrefix: boolean,
 ): VirtualRange[] {
   const branch = ctx.sessionManager.buildContextEntries();
   const reserved: VirtualCompressionBlock[] = [...blocks];
@@ -310,7 +313,7 @@ function planCompressibleRanges(
       maxInputTokens,
       targetTokens,
       config.contextRelief.activeWorkingSetTokens,
-      planned.length === 0,
+      allowActivePrefix && planned.length === 0,
     );
     if (!range) {
       (globalThis as any).__dcp_lastCreateReason = `no range (branch=${branch.length} blocks=${reserved.length} maxInput=${maxInputTokens})`;

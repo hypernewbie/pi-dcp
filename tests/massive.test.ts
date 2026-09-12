@@ -376,7 +376,7 @@ describe("/dcp context: alias for /dcp status", () => {
 // ============================================================================
 
 describe("/dcp compact: mid-run deferral", () => {
-  it("defers when the agent is mid-run and runs at next turn_end", async () => {
+  it("folds closed historical work immediately while the agent is mid-run", async () => {
     const branch = [
       userMessage("u1", "x".repeat(200_000)),
       assistantMessage("a1", "done"),
@@ -389,17 +389,11 @@ describe("/dcp compact: mid-run deferral", () => {
     });
 
     await dcpCommand.handler!("compact", ctx);
-    // Deferred - no summarizer call yet.
-    expect(completeSimpleMock.mock.calls.length).toBe(0);
-    expect(notified.some((m) => m.includes("end of the current step"))).toBe(true);
-
-    // Turn ends - deferred compact runs.
-    ctx.isIdle = () => true;
-    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
     expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
+    expect(notified.some((m) => m.includes("end of the current step"))).toBe(false);
   });
 
-  it("waits for an open tool group even if the host reports idle", async () => {
+  it("folds closed history without touching an open active tool group", async () => {
     const branch = [
       userMessage("u1", "x".repeat(200_000)),
       assistantMessage("a1", "done"),
@@ -408,12 +402,9 @@ describe("/dcp compact: mid-run deferral", () => {
     ];
     const { dcpCommand, ctx, hooks } = await setupExtension({ branch, usageTokens: 900_000, idle: true });
     await dcpCommand.handler!("compact", ctx);
-    expect(completeSimpleMock).not.toHaveBeenCalled();
-    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
-    expect(completeSimpleMock).not.toHaveBeenCalled();
-    branch.push(toolResult("r1", "tc1", "finished"));
-    for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
     expect(completeSimpleMock).toHaveBeenCalled();
+    // The current tool group remains raw; it is not a virtual range candidate.
+    expect(branch.some((entry) => entry.id === "a2")).toBe(true);
   });
 
   it("does NOT defer when the agent is idle", async () => {

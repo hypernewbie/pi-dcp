@@ -536,13 +536,10 @@ describe("extension entry point", () => {
     }
   });
 
-  it("/dcp compact typed while the agent is mid-run is deferred to the next turn_end, not run inline", async () => {
-    // Regression test for Fix 3: Pi executes extension commands during streaming,
-    // so /dcp compact typed mid-run ran inline. The relief's summarizer calls
-    // shared the live run's abort signal, so ESC aborted the user's compact
-    // with a misleading "no work available" message, and the relief raced
-    // the live run. With the fix, a mid-run compact is deferred and consumed
-    // at the next turn_end.
+  it("/dcp compact typed mid-run immediately folds closed historical work", async () => {
+    // A manual compact must not be held hostage by Pi's streaming flag. It can
+    // fold completed historical work immediately while leaving the active tail
+    // completely raw.
     const mod = await import(EXTENSION_PATH);
     const hooks: Record<string, Function[]> = {};
     const commands: Array<{ name: string; description?: string; handler?: Function }> = [];
@@ -560,8 +557,7 @@ describe("extension entry point", () => {
     completeSimpleMock.mockReset();
     completeSimpleMock.mockResolvedValue({ stopReason: "stop", content: [{ type: "text", text: "tiny summary" }] });
 
-    // Mocked ctx reports busy for the user's /dcp compact, then idle for the
-    // next turn_end so the deferred compact can consume.
+    // Pi reports a live run, but the chosen history is already closed.
     let idle = false;
     const notifiedMessages: string[] = [];
     const ctx: any = {
@@ -585,23 +581,11 @@ describe("extension entry point", () => {
 
       const dcpCommand = commands.find((c) => c.name === "dcp")!;
 
-      // Agent is mid-run. /dcp compact must defer, not run inline.
       idle = false;
       notifiedMessages.length = 0;
       await dcpCommand.handler!("compact", ctx);
 
-      const deferredNotices = notifiedMessages.filter((m) => m.includes("end of the current step"));
-      expect(deferredNotices.length).toBe(1);
-
-      // The summarizer must NOT have been called yet - the relief was deferred.
-      expect(completeSimpleMock.mock.calls.length).toBe(0);
-
-      // Now the turn ends and the agent becomes idle. The deferred compact is
-      // consumed from turn_end before the auto-trigger runs.
-      idle = true;
-      for (const h of hooks["turn_end"] ?? []) await h({ type: "turn_end" }, ctx);
-
-      // The deferred compact ran.
+      expect(notifiedMessages.some((m) => m.includes("end of the current step"))).toBe(false);
       expect(completeSimpleMock.mock.calls.length).toBeGreaterThan(0);
     } finally {
       completeSimpleMock.mockReset();

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.33
+
+- Manual compact no longer waits on Pi's broad busy flag. It folds closed historical work immediately while leaving the active tail and any open tool group raw.
+
 ## 0.8.32
 
 - Make every explicit `_continue` command queue its continuation prompt, even when another user message is already pending.

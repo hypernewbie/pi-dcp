@@ -86,16 +86,9 @@ async function handleVirtualCompact(
     return;
   }
   if (state.triggerState.isCompacting) return;
-  // Defer mid-run rather than race the live turn. Running inline would mean
-  // the relief's summarizer calls share the run's abort signal (ESC kills the
-  // user's compact with a misleading "no work available" message) and the next
-  // contiguous tool/result boundary may not be safe to cut across until the
-  // turn actually ends.
-  if (!ctx.isIdle() || hasOpenToolCalls(ctx)) {
-    state.triggerState.pendingManualCompact = { focus: args.trim() || undefined, compressAfter: false, forceContinue: continueRequested };
-    notify(ctx, state.config, "Agent is busy; compact will run at the end of the current step, after active tool work closes.", "info");
-    return;
-  }
+  // A manual compact runs immediately. During a live run it selects only
+  // closed historical work, leaving the mutable active tail entirely raw.
+  const allowActivePrefix = ctx.isIdle() && !hasOpenToolCalls(ctx);
   state.triggerState.isCompacting = true;
   setCompactingWorking(ctx, true);
   try {
@@ -120,6 +113,7 @@ async function handleVirtualCompact(
       pi.getThinkingLevel(),
       freeTarget,
       state.config.notification !== "off",
+      allowActivePrefix,
     );
     if (relief.created.length === 0) {
       // Deep diagnostic for 240k bug — trace selector decisions.
