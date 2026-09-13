@@ -86,9 +86,9 @@ async function handleVirtualCompact(
     return;
   }
   if (state.triggerState.isCompacting) return;
-  // A manual compact runs immediately. During a live run it selects only
-  // closed historical work, leaving the mutable active tail entirely raw.
-  const allowActivePrefix = ctx.isIdle() && !hasOpenToolCalls(ctx);
+  // A manual compact runs immediately and always folds something. During a
+  // live run it prefers closed historical work; the active-prefix fold is
+  // always allowed because it only ever cuts at closed tool boundaries.
   state.triggerState.isCompacting = true;
   setCompactingWorking(ctx, true);
   try {
@@ -113,76 +113,8 @@ async function handleVirtualCompact(
       pi.getThinkingLevel(),
       freeTarget,
       state.config.notification !== "off",
-      allowActivePrefix,
     );
     if (relief.created.length === 0) {
-      // Deep diagnostic for 240k bug — trace selector decisions.
-      let diag = "";
-      try {
-        const branch: any[] = ctx.sessionManager.getBranch() as any[];
-        const { sessionEntryToContextMessages, estimateTokens } = await import("@earendil-works/pi-coding-agent");
-        const est = (m:any)=> estimateTokens(m);
-        const userStarts: number[] = [];
-        for (let i=0;i<branch.length;i++) if (branch[i].type==='message' && branch[i].message?.role==='user') userStarts.push(i);
-        const covered = new Set<string>();
-        for (const b of state.virtualBlocks as any[]) {
-          const s = branch.findIndex((e:any)=>e.id===b.startEntryId);
-          const ei = branch.findIndex((e:any)=>e.id===b.endEntryId);
-          if (s>=0 && ei>=s) for(let i=s;i<=ei;i++) covered.add(branch[i].id);
-        }
-        let totalTurns=userStarts.length>1?userStarts.length-1:0;
-        let unavailable=0, empty=0, tooLarge=0, tooSmall=0, notClosed=0, candidates=0, largest=0;
-        let activeInfo="";
-        for(let i=0;i<userStarts.length-1;i++){
-          const s=userStarts[i], e=userStarts[i+1]-1;
-          const cand=branch.slice(s,e+1);
-          const unavail = cand.some((en:any)=>covered.has(en.id)) || cand.some((en:any)=>en.type==='compaction'||en.type==='branch_summary');
-          if(unavail){ unavailable++; continue; }
-          const msgs=cand.flatMap((en:any)=> sessionEntryToContextMessages(en));
-          if(msgs.length===0){ empty++; continue; }
-          const t=msgs.reduce((sum:number,m:any)=>sum+est(m),0);
-          if(t>100000){ tooLarge++; if(t>largest) largest=t; continue; }
-          if(t<1000){ tooSmall++; continue; }
-          // closed check
-          const calls=new Set<string>(), results=new Set<string>();
-          for(const en of cand) for(const m of sessionEntryToContextMessages(en)){
-            if(m.role==='assistant') for(const p of (m.content as any)) if(p.type==='toolCall') calls.add(p.id);
-            if(m.role==='toolResult') results.add((m as any).toolCallId);
-          }
-          let closed=true;
-          for(const id of calls) if(!results.has(id)) {closed=false; break;}
-          if(closed) for(const id of results) if(!calls.has(id)) {closed=false; break;}
-          if(!closed){ notClosed++; continue; }
-          candidates++; if(t>largest) largest=t;
-        }
-        // active prefix trace
-        if(userStarts.length){
-          const fs=userStarts[userStarts.length-1];
-          const finalEntries=branch.slice(fs);
-          const curReq=sessionEntryToContextMessages(finalEntries[0]);
-          const activeEntries=finalEntries.slice(1);
-          let activeTokens=0;
-          for(const en of activeEntries) for(const m of sessionEntryToContextMessages(en)) activeTokens+=est(m);
-          let running=0; const open=new Set<string>(); let prefixEnd=-1, prefixTokens=0;
-          for(let i=0;i<activeEntries.length;i++){
-            const en=activeEntries[i];
-            const msgs=sessionEntryToContextMessages(en);
-            running+=msgs.reduce((s:number,m:any)=>s+est(m),0);
-            for(const m of msgs){
-              if(m.role==='assistant') for(const p of (m.content as any)) if(p.type==='toolCall') open.add(p.id);
-              if(m.role==='toolResult') open.delete((m as any).toolCallId);
-            }
-            if(en.type!=='message'||en.message.role!=='toolResult') continue;
-            if(open.size>0) continue;
-            const suffix=activeTokens-running;
-            if(suffix>=35000 && running<=100000){ prefixEnd=i; prefixTokens=running; }
-          }
-          activeInfo=` activeLen=${activeEntries.length} activeTokens~${Math.round(activeTokens)} prefixEnd=${prefixEnd} prefixTokens~${Math.round(prefixTokens)}`;
-        }
-        const lastReason = (globalThis as any).__dcp_lastCreateReason || "noRange";
-        diag=` branch=${branch.length} userStarts=${userStarts.length} totalTurns=${totalTurns} compEntries=${branch.filter((e:any)=>e.type==='compaction').length} covered=${covered.size} candidates=${candidates} largest~${Math.round(largest)} unavailable=${unavailable} empty=${empty} tooLarge=${tooLarge} tooSmall=${tooSmall} notClosed=${notClosed}${activeInfo} lastCreate=${String(lastReason).slice(0,120)}`;
-      } catch (e:any) { diag=` diagError=${String(e?.message||e).slice(0,120)}`; }
-      notify(ctx, state.config, `No completed work was available to compact. (diag:${diag})`, "info");
       if (continueRequested) resumeCurrentTask(pi, ctx);
       return;
     }
@@ -217,12 +149,6 @@ async function handleVirtualCompact(
         retireVirtualBlock(pi, block.id);
       }
       state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
-      notify(
-        ctx,
-        state.config,
-        `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
-        "warning",
-      );
     }
     notify(ctx, state.config, `Compacted ${relief.created.length} range${relief.created.length === 1 ? "" : "s"} of completed work (~${relief.freedTokens.toLocaleString()} tokens freed).`, "info");
   } finally {

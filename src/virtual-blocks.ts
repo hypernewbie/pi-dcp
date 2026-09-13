@@ -10,7 +10,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { selectCompressibleRange, type VirtualRange } from "./range-selector.ts";
+import { MIN_RANGE_RAW_TOKENS, selectCompressibleRange, type VirtualRange } from "./range-selector.ts";
 import { entryRangeCanBeReplaced, measureProjectedTokens } from "./context-projector.ts";
 import { debug } from "./ui.ts";
 import type {
@@ -198,7 +198,6 @@ export async function relieveContextPressure(
   thinkingLevel: ThinkingLevel,
   freeTargetTokens: number,
   showReceipts: boolean,
-  allowActivePrefix = true,
 ): Promise<{ created: VirtualCompressionBlock[]; freedTokens: number }> {
   const created: VirtualCompressionBlock[] = [];
   const firstNumber = blocks.length + 1;
@@ -217,15 +216,26 @@ export async function relieveContextPressure(
     const { outputLimit, modelInputLimit } = model
       ? resolveSummaryLimits(model, config)
       : { outputLimit: config.contextRelief.maxChunkSummaryTokens, modelInputLimit: config.contextRelief.maxChunkInputTokens };
-    const planned = planCompressibleRanges(
-      ctx,
-      config,
-      blocks,
-      Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit),
-      Math.min(config.contextRelief.targetHeadroomTokens, modelInputLimit),
-      freeTargetTokens,
-      allowActivePrefix,
-    );
+    // Escalating invasiveness — a compact always folds something. Each layer
+    // drops a selection floor until a safe foldable range exists; the last
+    // layer also splits oversized turns at closed boundaries and accepts any
+    // strictly smaller replacement block.
+    const capInput = Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit);
+    const capTarget = Math.min(config.contextRelief.targetHeadroomTokens, modelInputLimit);
+    const layers: Array<{ floor: number; split: boolean; emergency: boolean }> = [
+      { floor: MIN_RANGE_RAW_TOKENS, split: false, emergency: false },
+      { floor: 1_000, split: false, emergency: false },
+      { floor: 0, split: true, emergency: true },
+    ];
+    let planned: VirtualRange[] = [];
+    let emergency = false;
+    for (const layer of layers) {
+      planned = planCompressibleRanges(ctx, config, blocks, capInput, capTarget, freeTargetTokens, layer.floor, layer.split);
+      if (planned.length > 0) {
+        emergency = layer.emergency;
+        break;
+      }
+    }
     if (planned.length > 0) {
       // Summarize with bounded concurrency. Each worker only touches its own
       // pre-selected range, so live-block state is never mutated while the
@@ -233,8 +243,8 @@ export async function relieveContextPressure(
       // use the deterministic DCP reducer instead of leaving raw history.
       const results = await mapWithConcurrency(planned, SUMMARY_CONCURRENCY, (range) =>
         model
-          ? summarizeRange(ctx, config, protection, range, focus, thinkingLevel, model, outputLimit)
-          : Promise.resolve(createDeterministicBlock(range, config)),
+          ? summarizeRange(ctx, config, protection, range, focus, thinkingLevel, model, outputLimit, emergency)
+          : Promise.resolve(createDeterministicBlock(range, config, emergency)),
       );
       // Assemble in deterministic planned order after all calls completed;
       // failed or net-negative summaries are omitted from blocks, receipts,
@@ -297,7 +307,8 @@ function planCompressibleRanges(
   maxInputTokens: number,
   targetTokens: number,
   freeTargetTokens: number,
-  allowActivePrefix: boolean,
+  minRangeRawTokens: number,
+  splitOversizedTurns: boolean,
 ): VirtualRange[] {
   const branch = ctx.sessionManager.buildContextEntries();
   const reserved: VirtualCompressionBlock[] = [...blocks];
@@ -313,14 +324,14 @@ function planCompressibleRanges(
       maxInputTokens,
       targetTokens,
       config.contextRelief.activeWorkingSetTokens,
-      allowActivePrefix && planned.length === 0,
+      planned.length === 0,
+      minRangeRawTokens,
+      splitOversizedTurns,
     );
     if (!range) {
-      (globalThis as any).__dcp_lastCreateReason = `no range (branch=${branch.length} blocks=${reserved.length} maxInput=${maxInputTokens})`;
       break;
     }
     if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) {
-      (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens} -> notReplaceable`;
       break;
     }
     planned.push(range);
@@ -400,7 +411,6 @@ export async function createVirtualBlock(
     allowActivePrefix,
   );
   if (!range) {
-    (globalThis as any).__dcp_lastCreateReason = `no range (branch=${branch.length} blocks=${blocks.length} maxInput=${Math.min(config.contextRelief.maxChunkInputTokens, modelInputLimit)})`;
     return undefined;
   }
 
@@ -408,7 +418,6 @@ export async function createVirtualBlock(
   // this exact range, the block would be created, persisted, and then rejected
   // on every future request forever.
   if (!entryRangeCanBeReplaced(branch, range.startEntryId, range.endEntryId)) {
-    (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens} -> notReplaceable`;
     return undefined;
   }
 
@@ -424,6 +433,7 @@ export async function createVirtualBlock(
 function createDeterministicBlock(
   range: VirtualRange,
   config: DcpConfig,
+  emergency = false,
 ): VirtualCompressionBlock | undefined {
   const items = countRangeItems(range.messages);
   const summary = [
@@ -441,7 +451,9 @@ function createDeterministicBlock(
   const full = appendPreservedUserMessages(summary, range.messages, undefined, config.contextRelief.preservedUserMessageTokens);
   const estimatedBlockTokens = estimateTextTokens(full);
   const netReliefTokens = range.estimatedRawTokens - estimatedBlockTokens;
-  if (netReliefTokens < MIN_NET_RELIEF_TOKENS || netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) return undefined;
+  // Emergency layer: any strictly smaller block ships. Normal policy keeps
+  // the meaningful-relief floor so trivial folds never pay a model call.
+  if (emergency ? netReliefTokens <= 0 : (netReliefTokens < MIN_NET_RELIEF_TOKENS || netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO)) return undefined;
   return {
     version: 1,
     id: `dcp-block-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -479,11 +491,11 @@ export async function summarizeRange(
   thinkingLevel: ThinkingLevel,
   model: Model<any>,
   outputLimit: number,
+  emergency = false,
 ): Promise<VirtualCompressionBlock | undefined> {
-  (globalThis as any).__dcp_lastCreateReason = `range ${range.kind} ${range.startEntryId}..${range.endEntryId} raw~${range.estimatedRawTokens}`;
 
   const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) { (globalThis as any).__dcp_lastCreateReason += " -> noAuth"; return createDeterministicBlock(range, config); }
+  if (!auth.ok) { return createDeterministicBlock(range, config, emergency); }
 
   const conversationText = serializeConversation(convertToLlm(range.messages));
   const protectedResult = buildProtectedAppendix(range.messages, {
@@ -503,7 +515,7 @@ export async function summarizeRange(
   });
   const reasoning = model.reasoning && thinkingLevel !== "off" ? thinkingLevel : undefined;
   if (typeof model.contextWindow === "number" && model.contextWindow > 0 &&
-      estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) { (globalThis as any).__dcp_lastCreateReason += ` -> promptTooLarge ${estimateTextTokens(userPrompt)}+${outputLimit}>${model.contextWindow}`; return createDeterministicBlock(range, config); }
+      estimateTextTokens(userPrompt) + outputLimit > model.contextWindow) { return createDeterministicBlock(range, config, emergency); }
 
   try {
     const response = await completeSimple(
@@ -521,22 +533,23 @@ export async function summarizeRange(
         signal: ctx.signal,
       },
     );
-    if (response.stopReason === "error") { (globalThis as any).__dcp_lastCreateReason += ` -> summaryError ${response.errorMessage||""}`.slice(0,80); return createDeterministicBlock(range, config); }
+    if (response.stopReason === "error") { return createDeterministicBlock(range, config, emergency); }
     const summary = response.content
       .filter((part): part is { type: "text"; text: string } => part.type === "text" && typeof part.text === "string")
       .map((part) => part.text)
       .join("\n").trim();
-    if (!summary || /<\/?think(?:ing)?>/i.test(summary)) { (globalThis as any).__dcp_lastCreateReason += " -> emptyOrThinking"; return createDeterministicBlock(range, config); }
+    if (!summary || /<\/?think(?:ing)?>/i.test(summary)) { return createDeterministicBlock(range, config, emergency); }
 
     const preserved = collectRealUserMessages(range.messages);
     const composed = appendPreservedUserMessages(summary, range.messages, undefined, config.contextRelief.preservedUserMessageTokens);
     const full = evidence ? `${composed}\n\n## Exact evidence\n\n${evidence}` : composed;
     const estimatedBlockTokens = estimateTextTokens(full);
     const netReliefTokens = range.estimatedRawTokens - estimatedBlockTokens;
-    // Tiny wins do not justify a durable summary or a full model call. Require
-    // both meaningful absolute relief and a meaningful fraction of the range.
+    // Tiny wins do not justify a durable summary or a full model call — unless
+    // the emergency layer is active, where any strictly smaller block ships.
     if (netReliefTokens < MIN_NET_RELIEF_TOKENS ||
-        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) { (globalThis as any).__dcp_lastCreateReason += ` -> netReliefFail raw~${range.estimatedRawTokens} block~${estimatedBlockTokens} net~${netReliefTokens}`; return createDeterministicBlock(range, config); }
+        netReliefTokens < range.estimatedRawTokens * MIN_NET_RELIEF_RATIO) { return createDeterministicBlock(range, config, emergency); }
+    if (netReliefTokens <= 0) return undefined;
     const items = countRangeItems(range.messages);
     return {
       version: 1,
@@ -557,7 +570,7 @@ export async function summarizeRange(
       createdAt: Date.now(),
     };
   } catch {
-    return createDeterministicBlock(range, config);
+    return createDeterministicBlock(range, config, emergency);
   }
 }
 

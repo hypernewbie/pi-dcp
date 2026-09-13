@@ -277,7 +277,7 @@ describe("extension entry point", () => {
     }
   });
 
-  it("SAFETY: /dcp compact retires blocks when the projection cannot apply them", async () => {
+  it("EMERGENCY: /dcp compact always shrinks even an awkward orphaned-tool-result branch", async () => {
     // Regression test for the silent-failure bug: createVirtualBlock was
     // creating and persisting blocks even when the projector would later
     // reject them. The blocks would be persisted forever, the raw history
@@ -330,23 +330,18 @@ describe("extension entry point", () => {
       notifiedMessages.length = 0;
       await dcpCommand.handler!("compact", ctx);
 
-      // If the projection failed and the safety check fired, a warning was
-      // shown. Whether or not the warning fires, the important invariant is
-      // that the raw history is still the source of truth (blocks don't
-      // silently stick around after their projection fails).
-      const safetyNotice = notifiedMessages.find((m) => m.toLowerCase().includes("retired") || m.toLowerCase().includes("projection"));
-      // At minimum, the status line should still be populated (the display
-      // must not be empty regardless of which path the compact took).
-      expect(notifiedMessages.length).toBeGreaterThan(0);
-      // And /dcp status must work after compact.
+      // EMERGENCY INVARIANT: even a structurally awkward branch (tool result
+      // arriving after the current request) must compact. The escalation
+      // cascade folds the closed span; the session gets smaller. No failure
+      // notice exists anywhere in the plugin.
+      expect(notifiedMessages.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
+      const banned = notifiedMessages.filter((m) => /no completed work|could not|found no|retired/i.test(m));
+      expect(banned).toEqual([]);
+      // And /dcp status must work after compact, showing the smaller vctx.
       notifiedMessages.length = 0;
       await dcpCommand.handler!("status", ctx);
       const status = notifiedMessages.join("\n");
       expect(status).toContain("pi-dcp:");
-      // We do not assert safetyNotice must be present (some valid compact
-      // paths don't trigger it); the safety check only matters when the
-      // projection actually fails.
-      void safetyNotice;
     } finally {
       completeSimpleMock.mockReset();
     }

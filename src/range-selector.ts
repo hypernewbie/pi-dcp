@@ -28,6 +28,7 @@ export function selectCompressibleRange(
   activeWorkingSetTokens = 0,
   allowActivePrefix = true,
   minRangeRawTokens = MIN_RANGE_RAW_TOKENS,
+  splitOversizedTurns = false,
 ): VirtualRange | undefined {
   const covered = new Set<string>();
   for (const block of blocks) {
@@ -120,8 +121,17 @@ export function selectCompressibleRange(
       const messages = candidate.flatMap((entry) => sessionEntryToContextMessages(entry));
       if (messages.length === 0) continue;
       const tokens = messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0);
-      if (tokens > maxInputTokens) continue;
-      if (tokens < 1_000) continue; // avoid summarizing trivial turns
+      if (tokens > maxInputTokens) {
+        // Emergency layer: an oversized turn still folds at its largest closed
+        // internal boundary window instead of being skipped whole.
+        if (!splitOversizedTurns) continue;
+        const window = largestClosedWindow(entries, range.start, range.end, maxInputTokens);
+        if (window && (!best || window.tokens > best.tokens)) best = window;
+        continue;
+      }
+      // In an emergency re-scan (minRangeRawTokens 0) any non-empty closed
+      // turn is foldable; normally avoid summarizing trivial turns.
+      if (tokens < Math.min(minRangeRawTokens, 1_000)) continue;
       // Must be projectable (closed tool pairs).
       let closed = true;
       const calls = new Set<string>();
@@ -140,6 +150,42 @@ export function selectCompressibleRange(
     if (best) {
       const sel = entries.slice(best.start, best.end + 1);
       return makeRange(entries, [...sel], best.start, best.end, best.tokens);
+    }
+  }
+
+  // Terminal escalation (emergency only): fold the largest closed contiguous
+  // ENTRY span between hard barriers, ignoring turn alignment, size floors,
+  // and working-set policy. User prompts inside the span are carried forward
+  // verbatim (bounded); only tool-pair closure and barrier crossing remain
+  // hard constraints. This is the layer that makes a compact unconditional.
+  if (splitOversizedTurns) {
+    let bestSpan: { start: number; end: number; tokens: number } | undefined;
+    let islandStart = 0;
+    const flush = (islandEnd: number) => {
+      if (islandEnd < islandStart) return;
+      const window = largestClosedWindow(entries, islandStart, islandEnd, maxInputTokens);
+      if (window && (!bestSpan || window.tokens > bestSpan.tokens)) bestSpan = window;
+      let islandTokens = 0;
+      for (let i = islandStart; i <= islandEnd; i++) {
+        islandTokens += sessionEntryToContextMessages(entries[i]).reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+      }
+      if (islandTokens <= maxInputTokens && isClosedRange(entries, islandStart, islandEnd) &&
+          (!bestSpan || islandTokens > bestSpan.tokens)) {
+        bestSpan = { start: islandStart, end: islandEnd, tokens: islandTokens };
+      }
+    };
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i];
+      const barrier = entry.type === "compaction" || entry.type === "branch_summary" || covered.has(entry.id);
+      if (barrier) {
+        flush(i - 1);
+        islandStart = i + 1;
+      }
+    }
+    flush(entries.length - 1);
+    if (bestSpan) {
+      const sel = entries.slice(bestSpan.start, bestSpan.end + 1);
+      return makeRange(entries, [...sel], bestSpan.start, bestSpan.end, bestSpan.tokens);
     }
   }
 
@@ -197,6 +243,45 @@ export function selectCompressibleRange(
     retainedRawTokens: currentRequestTokens + (activeTokens - selectedPrefixTokens),
     estimatedRawTokens: selectedPrefixTokens,
   };
+}
+
+/**
+ * Largest closed contiguous entry window within [from, to] that stays under
+ * `cap` tokens. Cuts only at tool results that close every open tool call,
+ * and each candidate window is re-verified with the strict closed-range
+ * check so a result can never be separated from its call.
+ */
+function largestClosedWindow(
+  entries: readonly SessionEntry[],
+  from: number,
+  to: number,
+  cap: number,
+): { start: number; end: number; tokens: number } | undefined {
+  const entryTokens = (index: number): number =>
+    sessionEntryToContextMessages(entries[index]).reduce((sum, message) => sum + estimateMessageTokens(message), 0);
+  let best: { start: number; end: number; tokens: number } | undefined;
+  let start = from;
+  let running = 0;
+  for (let i = from; i <= to; i++) {
+    running += entryTokens(i);
+    while (running > cap && start < i) {
+      running -= entryTokens(start);
+      start++;
+    }
+    if (running > cap) {
+      // A single entry alone exceeds the cap; skip past it.
+      start = i + 1;
+      running = 0;
+      continue;
+    }
+    const entry = entries[i];
+    const isToolResultBoundary = entry.type === "message" && entry.message.role === "toolResult";
+    if (!isToolResultBoundary) continue;
+    if (!isClosedRange(entries, start, i)) continue;
+    const tokens = running;
+    if (tokens >= 1 && (!best || tokens > best.tokens)) best = { start, end: i, tokens };
+  }
+  return best;
 }
 
 function makeRange(

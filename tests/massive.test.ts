@@ -142,11 +142,11 @@ beforeEach(() => {
 // ============================================================================
 
 describe("/dcp compact: range selection", () => {
-  it("creates no block when the branch has only a current user message", async () => {
+  it("a fresh single-message session has no foldable mass and no failure notice exists", async () => {
     const branch = [userMessage("u1", "current")];
     const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 100 });
     await dcpCommand.handler!("compact", ctx);
-    expect(notified.some((m) => m.includes("No completed work"))).toBe(true);
+    expect(notified.some((m) => m.includes("No completed work"))).toBe(false);
   });
 
   it("creates a block from a single completed turn (user + assistant)", async () => {
@@ -199,20 +199,35 @@ describe("/dcp compact: range selection", () => {
     expect(notified.some((m) => m.includes("Compacted"))).toBe(true);
   });
 
-  it("refuses to split a parallel tool-call group (call inside, result outside)", async () => {
-    // Range covers assistant message with tool call tc1 but NOT its result
-    // r1 (r1 is in a later turn). The pre-creation check must reject.
+  it("compacts a late tool result by folding the whole closed span (never splitting the pair)", async () => {
+    // The tool call is in an earlier turn than its result. The pair is never
+    // split: the escalation cascade folds the entire closed span together.
     const branch = [
       userMessage("u1", "x".repeat(200_000)),
       assistantMessage("a1", "calling", [{ id: "tc1", name: "bash" }]),
       userMessage("u2", "current request"),
       toolResult("r1", "tc1", "late result"),
     ];
-    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    const { dcpCommand, ctx, mockApi, notified } = await setupExtension({ branch, usageTokens: 900_000 });
+    const blocks: any[] = [];
+    const originalAppend = mockApi.appendEntry as (type?: string, data?: any) => void;
+    mockApi.appendEntry = ((type: string, data: any) => {
+      if (type === "dcp-context-range.v1") blocks.push(data?.block);
+      originalAppend(type, data);
+    }) as any;
     await dcpCommand.handler!("compact", ctx);
-    // The compact should either find no compressible range or refuse the split.
-    // In either case, no "Compacted 1 range" message should appear.
-    expect(notified.some((m) => m.match(/Compacted \d+ range/))).toBe(false);
+    expect(notified.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
+    expect(blocks.length).toBeGreaterThan(0);
+    // The fold covers the call AND its result in one span — no orphaned half.
+    for (const block of blocks) {
+      const ids = branch.map((entry: any) => entry.id);
+      const start = ids.indexOf(block.startEntryId);
+      const end = ids.indexOf(block.endEntryId);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThanOrEqual(start);
+      const span = new Set(ids.slice(start, end + 1));
+      expect(span.has("a1")).toBe(span.has("r1"));
+    }
   });
 
   it("accepts a range that contains a complete tool-call group", async () => {
@@ -227,7 +242,7 @@ describe("/dcp compact: range selection", () => {
     expect(notified.some((m) => m.includes("Compacted"))).toBe(true);
   });
 
-  it("creates no block when no range meets the minimum size threshold", async () => {
+  it("trivial tiny turns have nothing smaller to become and no failure notice exists", async () => {
     const branch = [
       userMessage("u1", "tiny"),
       assistantMessage("a1", "tiny"),
@@ -235,7 +250,7 @@ describe("/dcp compact: range selection", () => {
     ];
     const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 100 });
     await dcpCommand.handler!("compact", ctx);
-    expect(notified.some((m) => m.includes("No completed work"))).toBe(true);
+    expect(notified.some((m) => m.includes("No completed work"))).toBe(false);
   });
 
   it("handles reasoning blocks in the assistant message (they are not conversational identity)", async () => {
@@ -405,6 +420,29 @@ describe("/dcp compact: mid-run deferral", () => {
     expect(completeSimpleMock).toHaveBeenCalled();
     // The current tool group remains raw; it is not a virtual range candidate.
     expect(branch.some((entry) => entry.id === "a2")).toBe(true);
+  });
+
+  it("folds the active prefix mid-run when history is exhausted (escalation invariant)", async () => {
+    // The 240K field case: every historical turn is covered or fragmented,
+    // the host reports the agent busy, and the only foldable work is the
+    // closed prefix of the active turn. The escalation cascade must fold it.
+    const branch: any[] = [
+      userMessage("u1", "x".repeat(60_000)),
+      assistantMessage("a1", "done"),
+      {
+        type: "custom", id: "blk1", parentId: "a1", timestamp: new Date().toISOString(),
+        customType: "dcp-context-range.v1",
+        data: { version: 1, block: { version: 1, id: "b-1", startEntryId: "u1", endEntryId: "a1", anchorEntryId: "u1", rangeKind: "historical", messagesCompressed: 2, toolsCompressed: 0, summary: "folded", exactEvidence: "", preservedUserMessages: [], estimatedRawTokens: 10, retainedRawTokens: 0, estimatedBlockTokens: 2, active: true, createdAt: Date.now() } },
+      },
+      userMessage("u2", "current request"),
+      assistantMessage("a2", "working", [{ id: "t1", name: "bash" }]),
+      { ...toolResult("r1", "t1", "y".repeat(200_000)), parentId: "a2" },
+      assistantMessage("a3", "z".repeat(200_000)),
+    ];
+    const { dcpCommand, ctx, notified } = await setupExtension({ branch, usageTokens: 240_000, idle: false });
+    await dcpCommand.handler!("compact", ctx);
+    expect(notified.some((m) => /Compacted \d+ range/.test(m))).toBe(true);
+    expect(notified.some((m) => m.includes("No completed work"))).toBe(false);
   });
 
   it("does NOT defer when the agent is idle", async () => {

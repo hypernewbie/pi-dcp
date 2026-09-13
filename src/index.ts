@@ -163,7 +163,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
           );
           if (relief.created.length === 0) {
             state.triggerState.tokensAtLastCompaction = usage.tokens;
-            notify(ctx, state.config, "No completed work was available to compact.", "info");
           } else {
             state.triggerState.turnsSinceCompaction = 0;
             // Measure the ACTIVE context (compactions applied), not the raw
@@ -187,12 +186,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
                 retireVirtualBlock(pi, block.id);
               }
               state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
-              notify(
-                ctx,
-                state.config,
-                `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
-                "warning",
-              );
             }
             notify(
               ctx,
@@ -267,12 +260,6 @@ export default function dcpExtension(pi: ExtensionAPI): void {
           retireVirtualBlock(pi, block.id);
         }
         state.virtualBlocks = state.virtualBlocks.filter((b) => !relief.created.some((c) => c.id === b.id));
-        notify(
-          ctx,
-          state.config,
-          `Compact created ${relief.created.length} ${relief.created.length === 1 ? "summary" : "summaries"} but the projection could not apply them (parallel tool calls or message drift). Retired. The raw history went out.`,
-          "warning",
-        );
       }
       debug(ctx, state.config, `Compacted ${relief.created.length} range(s), ~${relief.freedTokens.toLocaleString()} tokens freed`);
     } finally {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.34
+
+- Unconditional compact escalation: normal floors → lowered floors + always-on active prefix → oversized-turn splitting → terminal whole-span folding at closed tool boundaries. Any session with foldable mass shrinks; no failure notice exists in the plugin.
+
 ## 0.8.33
 
 - Manual compact no longer waits on Pi's broad busy flag. It folds closed historical work immediately while leaving the active tail and any open tool group raw.
