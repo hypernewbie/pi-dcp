@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.35
+
+- pi 1.0 compatibility: dev toolchain against `@earendil-works/*` 1.0.4; test mocks use `JsonObject` tool arguments (pi-ai 0.86 restriction). Runtime unchanged — extension loads, projects, and compacts under pi 1.0.4.
+
 ## 0.8.34
 
 - Unconditional compact escalation: normal floors → lowered floors + always-on active prefix → oversized-turn splitting → terminal whole-span folding at closed tool boundaries. Any session with foldable mass shrinks; no failure notice exists in the plugin.
